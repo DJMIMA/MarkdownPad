@@ -141,7 +141,8 @@ MarkdownPad は手動保存を基本にします。
 
 ## 開発前提
 
-このリポジトリは現在、仕様とドキュメントを固める段階です。
+このリポジトリは現在、仕様ドキュメントと Tauri v2 + React + TypeScript +
+Vite の初期 scaffold を含みます。
 
 予定している Tauri アプリを Windows で開発するには、次が必要です。
 
@@ -151,8 +152,42 @@ MarkdownPad は手動保存を基本にします。
 - Microsoft Edge WebView2 Runtime。多くの現代的な Windows 環境では既に
   インストール済みです。
 
-初期確認時点のローカル環境では Node.js と npm は利用可能でしたが、
-Rust/Cargo は未導入でした。
+初期確認時点のローカル環境では Node.js と npm は利用可能で、Rust/Cargo は
+後から導入されました。導入後、フロントエンドの production build と
+Tauri/Rust 側の `cargo check` は通過しています。
+
+## 開発コマンド
+
+依存関係が入っていない環境では、まず次を実行します。
+
+```powershell
+npm install
+```
+
+フロントエンドだけを起動します。
+
+```powershell
+npm run dev
+```
+
+フロントエンドの production build を確認します。
+
+```powershell
+npm run build
+```
+
+Tauri デスクトップアプリとして起動します。
+
+```powershell
+npm run tauri dev
+```
+
+Rust/Tauri 側だけを確認します。
+
+```powershell
+cd src-tauri
+cargo check
+```
 
 参考:
 
@@ -228,10 +263,10 @@ MVP では次を確認します。
 
 ## ロードマップ
 
-1. Tauri v2 + React + TypeScript + Vite のアプリを scaffold する。
-2. ネイティブメニューを定義し、メニューイベントをフロントエンドへ渡す。
-3. タブ状態と手動の開く/保存フローを実装する。
-4. CodeMirror 6 と Markdown 解析を統合する。
+1. 完了: Tauri v2 + React + TypeScript + Vite のアプリを scaffold する。
+2. 進行中: CodeMirror 6 と Markdown 解析を統合する。
+3. ネイティブメニューを定義し、メニューイベントをフロントエンドへ渡す。
+4. タブ状態と手動の開く/保存フローを実装する。
 5. カーソル行ソース表示を含むライブプレビュー装飾を実装する。
 6. アプリ内復元スナップショットとセッション復元を実装する。
 7. 検索、置換、ズーム、折り返し、ステータスバー、印刷ブリッジを追加する。

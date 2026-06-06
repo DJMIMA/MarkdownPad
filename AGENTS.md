@@ -31,7 +31,8 @@ MarkdownPad は、単体の Markdown ファイルを軽く開き、美しく読�
   は残すが、初期実装を複雑にしない。
 
 Tauri 開発には Rust/Cargo が必要です。初期確認時点のローカル環境では
-Node.js と npm は利用可能でしたが、Rust/Cargo は未導入でした。
+Node.js と npm は利用可能で、Rust/Cargo は後から導入されました。
+導入後、`npm run build` と `cargo check` は通過しています。
 
 ## MVP スコープ
 
