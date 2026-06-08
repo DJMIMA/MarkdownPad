@@ -1,0 +1,503 @@
+import { syntaxTree } from "@codemirror/language";
+import type { Range } from "@codemirror/state";
+import { EditorState, RangeSetBuilder, StateField } from "@codemirror/state";
+import {
+  Decoration,
+  type DecorationSet,
+  WidgetType,
+  EditorView,
+} from "@codemirror/view";
+import type { SyntaxNodeRef } from "@lezer/common";
+
+type SourceRange = {
+  from: number;
+  to: number;
+};
+
+type PreviewDecoration = Range<Decoration>;
+
+const headingLineDecorations = new Map<number, Decoration>();
+const quoteLineDecoration = Decoration.line({
+  class: "cm-md-quote-line",
+});
+const hiddenMarkDecoration = Decoration.replace({});
+
+export function headingLevelForNode(name: string): number | null {
+  const match = /^ATXHeading([1-6])$/.exec(name);
+  return match ? Number(match[1]) : null;
+}
+
+export function isStructuralBlock(name: string): boolean {
+  return name === "FencedCode" || name === "Table";
+}
+
+export function shouldHideMarkdownNode(name: string): boolean {
+  return (
+    name === "HeaderMark" ||
+    name === "QuoteMark" ||
+    name === "EmphasisMark" ||
+    name === "StrikethroughMark" ||
+    name === "LinkMark" ||
+    name === "URL" ||
+    name === "CodeMark" ||
+    name === "CodeInfo"
+  );
+}
+
+export function listMarkerLabel(marker: string): string {
+  if (/^\d+[.)]$/.test(marker.trim())) {
+    return marker.trim();
+  }
+
+  return "•";
+}
+
+function headingLineDecoration(level: number) {
+  const existing = headingLineDecorations.get(level);
+
+  if (existing) {
+    return existing;
+  }
+
+  const decoration = Decoration.line({
+    class: `cm-md-heading-line cm-md-heading-${level}`,
+  });
+  headingLineDecorations.set(level, decoration);
+  return decoration;
+}
+
+function rangeContainsPosition(range: SourceRange, position: number) {
+  return position >= range.from && position <= range.to;
+}
+
+function rangesIntersect(first: SourceRange, second: SourceRange) {
+  return first.from <= second.to && second.from <= first.to;
+}
+
+function sourceRangesForSelection(state: EditorState): SourceRange[] {
+  const ranges: SourceRange[] = [];
+  const tree = syntaxTree(state);
+
+  for (const selectionRange of state.selection.ranges) {
+    const from = Math.min(selectionRange.from, selectionRange.to);
+    const to = Math.max(selectionRange.from, selectionRange.to);
+    const startLine = state.doc.lineAt(from);
+    const endLine = state.doc.lineAt(to);
+
+    ranges.push({
+      from: startLine.from,
+      to: endLine.to,
+    });
+
+    tree.iterate({
+      enter(node) {
+        if (!isStructuralBlock(node.name)) {
+          return;
+        }
+
+        if (
+          rangeContainsPosition({ from: node.from, to: node.to }, selectionRange.head)
+        ) {
+          ranges.push({
+            from: node.from,
+            to: node.to,
+          });
+        }
+      },
+    });
+  }
+
+  return ranges;
+}
+
+function isInSourceRange(node: SyntaxNodeRef, ranges: SourceRange[]) {
+  const nodeRange = {
+    from: node.from,
+    to: node.to,
+  };
+
+  return ranges.some((range) => rangesIntersect(nodeRange, range));
+}
+
+function addDecoration(
+  decorations: PreviewDecoration[],
+  from: number,
+  to: number,
+  decoration: Decoration,
+) {
+  decorations.push(decoration.range(from, to));
+}
+
+function tokenEndWithTrailingSpace(state: EditorState, to: number) {
+  return state.doc.sliceString(to, to + 1) === " " ? to + 1 : to;
+}
+
+function parseCodeFence(markdown: string) {
+  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const firstLine = lines[0] ?? "";
+  const language = firstLine.replace(/^(```+|~~~+)/, "").trim();
+  const body = lines.length > 2 ? lines.slice(1, -1).join("\n") : "";
+
+  return {
+    language,
+    body,
+  };
+}
+
+function splitTableRow(line: string) {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+
+  return trimmed.split("|").map((cell) => cell.trim());
+}
+
+function parseMarkdownTable(markdown: string) {
+  const lines = markdown
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) {
+    return {
+      headers: [],
+      rows: [],
+    };
+  }
+
+  return {
+    headers: splitTableRow(lines[0]),
+    rows: lines.slice(2).map(splitTableRow),
+  };
+}
+
+function textNode(value: string) {
+  return document.createTextNode(value);
+}
+
+class ListMarkerWidget extends WidgetType {
+  private readonly marker: string;
+
+  constructor(marker: string) {
+    super();
+    this.marker = marker;
+  }
+
+  eq(widget: WidgetType) {
+    return widget instanceof ListMarkerWidget && widget.marker === this.marker;
+  }
+
+  toDOM() {
+    const marker = document.createElement("span");
+    marker.className = "cm-md-list-marker";
+    marker.textContent = `${listMarkerLabel(this.marker)} `;
+    marker.setAttribute("aria-hidden", "true");
+    return marker;
+  }
+}
+
+class TaskMarkerWidget extends WidgetType {
+  private readonly checked: boolean;
+
+  constructor(checked: boolean) {
+    super();
+    this.checked = checked;
+  }
+
+  eq(widget: WidgetType) {
+    return widget instanceof TaskMarkerWidget && widget.checked === this.checked;
+  }
+
+  toDOM() {
+    const checkbox = document.createElement("span");
+    checkbox.className = this.checked
+      ? "cm-md-task-marker checked"
+      : "cm-md-task-marker";
+    checkbox.setAttribute("aria-hidden", "true");
+    return checkbox;
+  }
+}
+
+class CodeBlockWidget extends WidgetType {
+  private readonly language: string;
+  private readonly body: string;
+
+  constructor(markdown: string) {
+    super();
+    const parsed = parseCodeFence(markdown);
+    this.language = parsed.language;
+    this.body = parsed.body;
+  }
+
+  eq(widget: WidgetType) {
+    return (
+      widget instanceof CodeBlockWidget &&
+      widget.language === this.language &&
+      widget.body === this.body
+    );
+  }
+
+  toDOM() {
+    const wrapper = document.createElement("div");
+    wrapper.className = "cm-md-code-block";
+
+    if (this.language) {
+      const label = document.createElement("span");
+      label.className = "cm-md-code-language";
+      label.textContent = this.language;
+      wrapper.append(label);
+    }
+
+    const pre = document.createElement("pre");
+    const code = document.createElement("code");
+    code.textContent = this.body;
+    pre.append(code);
+    wrapper.append(pre);
+
+    return wrapper;
+  }
+}
+
+class TableWidget extends WidgetType {
+  private readonly headers: string[];
+  private readonly rows: string[][];
+
+  constructor(markdown: string) {
+    super();
+    const parsed = parseMarkdownTable(markdown);
+    this.headers = parsed.headers;
+    this.rows = parsed.rows;
+  }
+
+  eq(widget: WidgetType) {
+    return (
+      widget instanceof TableWidget &&
+      JSON.stringify(widget.headers) === JSON.stringify(this.headers) &&
+      JSON.stringify(widget.rows) === JSON.stringify(this.rows)
+    );
+  }
+
+  toDOM() {
+    const wrapper = document.createElement("div");
+    wrapper.className = "cm-md-table-wrapper";
+
+    const table = document.createElement("table");
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+
+    for (const header of this.headers) {
+      const cell = document.createElement("th");
+      cell.append(textNode(header));
+      headerRow.append(cell);
+    }
+
+    thead.append(headerRow);
+    table.append(thead);
+
+    const tbody = document.createElement("tbody");
+
+    for (const row of this.rows) {
+      const tableRow = document.createElement("tr");
+
+      for (const cellValue of row) {
+        const cell = document.createElement("td");
+        cell.append(textNode(cellValue));
+        tableRow.append(cell);
+      }
+
+      tbody.append(tableRow);
+    }
+
+    table.append(tbody);
+    wrapper.append(table);
+
+    return wrapper;
+  }
+}
+
+class ImageWidget extends WidgetType {
+  private readonly alt: string;
+  private readonly url: string;
+
+  constructor(alt: string, url: string) {
+    super();
+    this.alt = alt;
+    this.url = url;
+  }
+
+  eq(widget: WidgetType) {
+    return (
+      widget instanceof ImageWidget &&
+      widget.alt === this.alt &&
+      widget.url === this.url
+    );
+  }
+
+  toDOM() {
+    const figure = document.createElement("figure");
+    figure.className = "cm-md-image-preview";
+
+    const image = document.createElement("img");
+    image.alt = this.alt;
+    image.src = this.url;
+    image.loading = "lazy";
+    figure.append(image);
+
+    if (this.alt) {
+      const caption = document.createElement("figcaption");
+      caption.textContent = this.alt;
+      figure.append(caption);
+    }
+
+    return figure;
+  }
+}
+
+function imageParts(markdown: string) {
+  const match = /^!\[(.*)]\((.*)\)$/.exec(markdown.trim());
+
+  return {
+    alt: match?.[1] ?? "",
+    url: match?.[2] ?? "",
+  };
+}
+
+function buildLivePreviewDecorations(state: EditorState): DecorationSet {
+  const decorations: PreviewDecoration[] = [];
+  const sourceRanges = sourceRangesForSelection(state);
+  const tree = syntaxTree(state);
+
+  tree.iterate({
+    enter(node) {
+      const level = headingLevelForNode(node.name);
+
+      if (level) {
+        const line = state.doc.lineAt(node.from);
+        addDecoration(
+          decorations,
+          line.from,
+          line.from,
+          headingLineDecoration(level),
+        );
+        return;
+      }
+
+      if (node.name === "Blockquote") {
+        const fromLine = state.doc.lineAt(node.from);
+        const toLine = state.doc.lineAt(node.to);
+
+        for (let lineNumber = fromLine.number; lineNumber <= toLine.number; lineNumber += 1) {
+          const line = state.doc.line(lineNumber);
+          addDecoration(decorations, line.from, line.from, quoteLineDecoration);
+        }
+
+        return;
+      }
+
+      if (isStructuralBlock(node.name) && !isInSourceRange(node, sourceRanges)) {
+        const text = state.doc.sliceString(node.from, node.to);
+        const widget =
+          node.name === "FencedCode" ? new CodeBlockWidget(text) : new TableWidget(text);
+
+        addDecoration(
+          decorations,
+          node.from,
+          node.to,
+          Decoration.replace({
+            widget,
+            block: true,
+          }),
+        );
+        return false;
+      }
+
+      if (node.name === "Image" && !isInSourceRange(node, sourceRanges)) {
+        const text = state.doc.sliceString(node.from, node.to);
+        const image = imageParts(text);
+
+        if (image.url) {
+          addDecoration(
+            decorations,
+            node.from,
+            node.to,
+            Decoration.replace({
+              widget: new ImageWidget(image.alt, image.url),
+            }),
+          );
+          return false;
+        }
+      }
+
+      if (isInSourceRange(node, sourceRanges)) {
+        return;
+      }
+
+      if (node.name === "ListMark") {
+        const marker = state.doc.sliceString(node.from, node.to);
+        addDecoration(
+          decorations,
+          node.from,
+          tokenEndWithTrailingSpace(state, node.to),
+          Decoration.replace({
+            widget: new ListMarkerWidget(marker),
+          }),
+        );
+        return;
+      }
+
+      if (node.name === "TaskMarker") {
+        const marker = state.doc.sliceString(node.from, node.to);
+        addDecoration(
+          decorations,
+          node.from,
+          tokenEndWithTrailingSpace(state, node.to),
+          Decoration.replace({
+            widget: new TaskMarkerWidget(/x/i.test(marker)),
+          }),
+        );
+        return;
+      }
+
+      if (shouldHideMarkdownNode(node.name)) {
+        const to =
+          node.name === "HeaderMark" || node.name === "QuoteMark"
+            ? tokenEndWithTrailingSpace(state, node.to)
+            : node.to;
+        addDecoration(decorations, node.from, to, hiddenMarkDecoration);
+      }
+    },
+  });
+
+  decorations.sort((first, second) => {
+    if (first.from !== second.from) {
+      return first.from - second.from;
+    }
+
+    return first.to - second.to;
+  });
+
+  const builder = new RangeSetBuilder<Decoration>();
+
+  for (const decoration of decorations) {
+    builder.add(decoration.from, decoration.to, decoration.value);
+  }
+
+  return builder.finish();
+}
+
+const livePreviewField = StateField.define<DecorationSet>({
+  create(state) {
+    return buildLivePreviewDecorations(state);
+  },
+  update(decorations, transaction) {
+    if (transaction.docChanged || transaction.selection) {
+      return buildLivePreviewDecorations(transaction.state);
+    }
+
+    return decorations.map(transaction.changes);
+  },
+  provide(field) {
+    return EditorView.decorations.from(field);
+  },
+});
+
+export const livePreview = livePreviewField;
