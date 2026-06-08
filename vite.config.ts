@@ -10,5 +10,10 @@ export default defineConfig({
     strictPort: true,
   },
   envPrefix: ["VITE_", "TAURI_"],
+  // The app only ever runs inside the bundled WebView2 (modern Chromium), so
+  // we can target esnext and skip legacy transforms for smaller, faster output.
+  build: {
+    target: "esnext",
+  },
 });
 

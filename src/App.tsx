@@ -3,7 +3,6 @@ import {
   MarkdownEditor,
   type MarkdownEditorHandle,
 } from "./editor/MarkdownEditor";
-import { markdownPrintDocument } from "./markdown";
 import {
   listenToMenuActions,
   type MenuAction,
@@ -21,6 +20,13 @@ import {
   closeCurrentWindow,
   listenToCloseRequested,
 } from "./platform";
+import { commandEdit, menuGroups, shortcutCommandFromEvent } from "./menu";
+import { MenuBar } from "./components/MenuBar";
+import { TabStrip } from "./components/TabStrip";
+import { StatusBar } from "./components/StatusBar";
+import { ThemeToggle } from "./components/ThemeToggle";
+import { ModalDialog } from "./components/ModalDialog";
+import { useTheme } from "./useTheme";
 import {
   countWords,
   createUntitledTab,
@@ -29,20 +35,6 @@ import {
   positionToLineColumn,
 } from "./state";
 import type { DocumentTab, EditorSettings, RecoverySnapshot } from "./types";
-
-type MenuItem = {
-  action: MenuAction;
-  label: string;
-  shortcut?: string;
-  checked?: boolean;
-  separatorBefore?: boolean;
-};
-
-type MenuGroup = {
-  id: string;
-  label: string;
-  items: MenuItem[];
-};
 
 type UnsavedDialogDecision = "save" | "discard" | "cancel";
 
@@ -56,149 +48,6 @@ type RecoveryDialogState = {
   snapshot: RecoverySnapshot;
   launchTab: DocumentTab | null;
 };
-
-type ShortcutCommand = MenuAction | "find-next" | "find-previous";
-
-function menuGroups(settings: EditorSettings): MenuGroup[] {
-  return [
-    {
-      id: "file",
-      label: "ファイル",
-      items: [
-        { action: "new-tab", label: "新しいタブ", shortcut: "Ctrl+N" },
-        {
-          action: "new-window",
-          label: "新しいウインドウ",
-          shortcut: "Ctrl+Shift+N",
-        },
-        {
-          action: "open",
-          label: "開く",
-          shortcut: "Ctrl+O",
-          separatorBefore: true,
-        },
-        { action: "save", label: "保存", shortcut: "Ctrl+S" },
-        {
-          action: "save-as",
-          label: "名前を付けて保存",
-          shortcut: "Ctrl+Shift+S",
-        },
-        {
-          action: "print",
-          label: "印刷",
-          shortcut: "Ctrl+P",
-          separatorBefore: true,
-        },
-        {
-          action: "close-tab",
-          label: "タブを閉じる",
-          shortcut: "Ctrl+W",
-          separatorBefore: true,
-        },
-        {
-          action: "close-window",
-          label: "ウィンドウを閉じる",
-          shortcut: "Ctrl+Shift+W",
-        },
-        { action: "quit", label: "終了" },
-      ],
-    },
-    {
-      id: "edit",
-      label: "編集",
-      items: [
-        { action: "cut", label: "切り取り", shortcut: "Ctrl+X" },
-        { action: "copy", label: "コピー", shortcut: "Ctrl+C" },
-        { action: "paste", label: "貼り付け", shortcut: "Ctrl+V" },
-        {
-          action: "find",
-          label: "検索",
-          shortcut: "Ctrl+F",
-          separatorBefore: true,
-        },
-        { action: "replace", label: "置換", shortcut: "Ctrl+H" },
-        {
-          action: "select-all",
-          label: "全てを選択",
-          shortcut: "Ctrl+A",
-          separatorBefore: true,
-        },
-      ],
-    },
-    {
-      id: "view",
-      label: "表示",
-      items: [
-        { action: "zoom-in", label: "拡大", shortcut: "Ctrl++" },
-        { action: "zoom-out", label: "縮小", shortcut: "Ctrl+-" },
-        { action: "zoom-reset", label: "既定値に戻す", shortcut: "Ctrl+0" },
-        {
-          action: "toggle-word-wrap",
-          label: "右端で折り返す",
-          checked: settings.wordWrap,
-          separatorBefore: true,
-        },
-        {
-          action: "toggle-status-bar",
-          label: "ステータスバー",
-          checked: settings.showStatusBar,
-        },
-      ],
-    },
-  ];
-}
-
-function shortcutCommandFromEvent(event: KeyboardEvent): ShortcutCommand | null {
-  if (event.altKey) {
-    return null;
-  }
-
-  if (
-    event.key === "F3" &&
-    !event.ctrlKey &&
-    !event.metaKey
-  ) {
-    return event.shiftKey ? "find-previous" : "find-next";
-  }
-
-  const hasPrimaryModifier = event.ctrlKey || event.metaKey;
-
-  if (!hasPrimaryModifier) {
-    return null;
-  }
-
-  const key = event.key.toLowerCase();
-
-  switch (key) {
-    case "n":
-      return event.shiftKey ? "new-window" : "new-tab";
-    case "o":
-      return event.shiftKey ? null : "open";
-    case "s":
-      return event.shiftKey ? "save-as" : "save";
-    case "p":
-      return event.shiftKey ? null : "print";
-    case "w":
-      return event.shiftKey ? "close-window" : "close-tab";
-    case "f":
-      return event.shiftKey ? null : "find";
-    case "h":
-      return event.shiftKey ? null : "replace";
-    case "+":
-    case "=":
-      return "zoom-in";
-    case "-":
-      return "zoom-out";
-    case "0":
-      return "zoom-reset";
-    default:
-      return null;
-  }
-}
-
-function commandEdit(action: "cut" | "copy" | "paste") {
-  document.execCommand(action);
-}
 
 function updateTabById(
   tabs: DocumentTab[],
@@ -256,6 +105,7 @@ function App() {
     useState<UnsavedDialogState | null>(null);
   const [recoveryDialog, setRecoveryDialog] =
     useState<RecoveryDialogState | null>(null);
+  const { resolvedTheme, toggleTheme } = useTheme();
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const nextUntitledIndex = tabs.filter((tab) => tab.isUntitled).length + 1;
@@ -470,11 +320,13 @@ function App() {
         case "save-as":
           await saveActiveTab(true);
           break;
-        case "print":
+        case "print": {
+          const { markdownPrintDocument } = await import("./markdown");
           await printMarkdownDocument(
             markdownPrintDocument(activeTab.content, activeTab.title),
           );
           break;
+        }
         case "close-tab":
           await closeTab(activeTab.id);
           break;
@@ -741,98 +593,27 @@ function App() {
     <div className="app-shell">
       <header className="top-bar">
         {showFallbackMenu ? (
-          <nav className="menu-bar" aria-label="Application menu">
-            {groups.map((group) => (
-              <div className="menu-root" key={group.id}>
-                <button
-                  className="menu-root-button"
-                  type="button"
-                  aria-expanded={openMenuId === group.id}
-                  onClick={() =>
-                    setOpenMenuId((current) =>
-                      current === group.id ? null : group.id,
-                    )
-                  }
-                >
-                  {group.label}
-                </button>
-
-                {openMenuId === group.id ? (
-                  <div className="menu-popover" role="menu">
-                    {group.items.map((item) => (
-                      <button
-                        key={item.action}
-                        className={
-                          item.separatorBefore
-                            ? "menu-item separator-before"
-                            : "menu-item"
-                        }
-                        type="button"
-                        role="menuitem"
-                        onClick={() => void handleAction(item.action)}
-                      >
-                        <span>{item.label}</span>
-                        <span className="menu-shortcut">{item.shortcut ?? ""}</span>
-                        <span className="menu-check" aria-hidden="true">
-                          {item.checked ? "✓" : ""}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </nav>
+          <MenuBar
+            groups={groups}
+            openMenuId={openMenuId}
+            onToggleMenu={(id) =>
+              setOpenMenuId((current) => (current === id ? null : id))
+            }
+            onAction={(action) => void handleAction(action)}
+          />
         ) : null}
 
-        <div className="tab-strip" role="tablist" aria-label="Open tabs">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              className={`tab-button ${tab.id === activeTabId ? "active" : ""}`}
-              type="button"
-              role="tab"
-              aria-selected={tab.id === activeTabId}
-              onClick={() => setActiveTabId(tab.id)}
-            >
-              <span className="tab-title">
-                {tab.dirty ? `${tab.title} *` : tab.title}
-              </span>
-              <span
-                className="close-tab"
-                role="button"
-                aria-label={`${tab.title} を閉じる`}
-                tabIndex={0}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void closeTab(tab.id);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    void closeTab(tab.id);
-                  }
-                }}
-              >
-                ×
-              </span>
-            </button>
-          ))}
-
-          <button
-            className="new-tab-button"
-            type="button"
-            title="新しいタブ"
-            aria-label="新しいタブ"
-            onClick={addTab}
-          >
-            +
-          </button>
-        </div>
+        <TabStrip
+          tabs={tabs}
+          activeTabId={activeTabId}
+          onSelect={setActiveTabId}
+          onClose={(tabId) => void closeTab(tabId)}
+          onAdd={addTab}
+        />
 
         <div className="top-status" aria-label="View">
-          <span>{settings.zoom}%</span>
+          <ThemeToggle resolvedTheme={resolvedTheme} onToggle={toggleTheme} />
+          <span className="zoom-indicator">{settings.zoom}%</span>
         </div>
       </header>
 
@@ -856,84 +637,59 @@ function App() {
       </main>
 
       {settings.showStatusBar ? (
-        <footer className="status-bar">
-          <span>{activeTab.path ?? "未保存の Markdown"}</span>
-          <span>行 {status.line}, 列 {status.column}</span>
-          <span>{status.characters} 文字</span>
-          <span>{status.words} 語</span>
-          <span>{activeTab.dirty ? "未保存" : "保存済み"}</span>
-          <span>{settings.wordWrap ? "折り返し" : "折り返しなし"}</span>
-        </footer>
+        <StatusBar
+          path={activeTab.path}
+          dirty={activeTab.dirty}
+          line={status.line}
+          column={status.column}
+          characters={status.characters}
+          words={status.words}
+          wordWrap={settings.wordWrap}
+        />
       ) : null}
 
       {recoveryDialog ? (
-        <div className="dialog-backdrop" role="presentation">
-          <section
-            className="unsaved-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="recovery-dialog-title"
-            aria-describedby="recovery-dialog-message"
-          >
-            <h2 id="recovery-dialog-title">MarkdownPad</h2>
-            <p id="recovery-dialog-message">
-              前回アプリが異常終了しています。復元しますか？
-            </p>
-            <div className="unsaved-dialog-actions">
-              <button
-                type="button"
-                className="primary"
-                autoFocus
-                onClick={() => void chooseRecoveryDialog(true)}
-              >
-                はい
-              </button>
-              <button
-                type="button"
-                onClick={() => void chooseRecoveryDialog(false)}
-              >
-                いいえ
-              </button>
-            </div>
-          </section>
-        </div>
+        <ModalDialog
+          id="recovery-dialog"
+          title="MarkdownPad"
+          message="前回アプリが異常終了しています。復元しますか？"
+          buttons={[
+            {
+              label: "はい",
+              primary: true,
+              autoFocus: true,
+              onClick: () => void chooseRecoveryDialog(true),
+            },
+            {
+              label: "いいえ",
+              onClick: () => void chooseRecoveryDialog(false),
+            },
+          ]}
+        />
       ) : null}
 
       {unsavedDialog ? (
-        <div className="dialog-backdrop" role="presentation">
-          <section
-            className="unsaved-dialog"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="unsaved-dialog-title"
-            aria-describedby="unsaved-dialog-message"
-          >
-            <h2 id="unsaved-dialog-title">{unsavedDialog.title}</h2>
-            <p id="unsaved-dialog-message">{unsavedDialog.message}</p>
-            <div className="unsaved-dialog-actions">
-              <button
-                type="button"
-                className="primary"
-                autoFocus
-                onClick={() => chooseUnsavedDialog("save")}
-              >
-                保存
-              </button>
-              <button
-                type="button"
-                onClick={() => chooseUnsavedDialog("discard")}
-              >
-                保存しない
-              </button>
-              <button
-                type="button"
-                onClick={() => chooseUnsavedDialog("cancel")}
-              >
-                キャンセル
-              </button>
-            </div>
-          </section>
-        </div>
+        <ModalDialog
+          id="unsaved-dialog"
+          title={unsavedDialog.title}
+          message={unsavedDialog.message}
+          buttons={[
+            {
+              label: "保存",
+              primary: true,
+              autoFocus: true,
+              onClick: () => chooseUnsavedDialog("save"),
+            },
+            {
+              label: "保存しない",
+              onClick: () => chooseUnsavedDialog("discard"),
+            },
+            {
+              label: "キャンセル",
+              onClick: () => chooseUnsavedDialog("cancel"),
+            },
+          ]}
+        />
       ) : null}
     </div>
   );

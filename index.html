@@ -8,6 +8,29 @@
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%23f8f6f1'/%3E%3Cpath d='M15 47V17h8l9 17 9-17h8v30h-7V29L34 47h-5l-8-18v18z' fill='%230d4e52'/%3E%3C/svg%3E"
     />
     <title>MarkdownPad</title>
+    <script>
+      // Resolve the theme before first paint to avoid a light-mode flash.
+      (function () {
+        try {
+          if (new URLSearchParams(location.search).has("print")) {
+            return;
+          }
+
+          var stored = localStorage.getItem("markdownpad.theme.v1");
+          var mode = stored === "light" || stored === "dark" ? stored : "system";
+          var prefersDark =
+            window.matchMedia &&
+            window.matchMedia("(prefers-color-scheme: dark)").matches;
+          var theme = mode === "dark" || (mode === "system" && prefersDark)
+            ? "dark"
+            : "light";
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+        } catch (error) {
+          // Ignore and fall back to the default light theme.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
