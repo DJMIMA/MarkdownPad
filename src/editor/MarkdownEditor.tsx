@@ -14,12 +14,18 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language";
 import {
+  closeSearchPanel,
+  findNext as findNextMatch,
+  findPrevious as findPreviousMatch,
+  getSearchQuery,
   highlightSelectionMatches,
   openSearchPanel,
   replaceAll,
   replaceNext,
   search,
   searchKeymap,
+  SearchQuery,
+  setSearchQuery,
 } from "@codemirror/search";
 import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import {
@@ -28,6 +34,7 @@ import {
   highlightActiveLineGutter,
   keymap,
   lineNumbers,
+  type Panel,
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { livePreview } from "./livePreview";
@@ -54,9 +61,243 @@ export interface MarkdownEditorHandle {
   focus: () => void;
   openSearch: () => void;
   openReplace: () => void;
+  findNext: () => void;
+  findPrevious: () => void;
   replaceNext: () => void;
   replaceAll: () => void;
   selectAll: () => void;
+}
+
+type SearchPanelMode = "search" | "replace";
+
+const searchPanelModes = new WeakMap<EditorView, SearchPanelMode>();
+
+function applySearchPanelMode(view: EditorView, mode: SearchPanelMode) {
+  searchPanelModes.set(view, mode);
+
+  const panel = view.dom.querySelector<HTMLElement>(".cm-md-search-panel");
+
+  if (!panel) {
+    return;
+  }
+
+  panel.dataset.mode = mode;
+  const toggle = panel.querySelector<HTMLButtonElement>(
+    ".cm-md-search-mode-toggle",
+  );
+
+  if (toggle) {
+    toggle.textContent = mode === "replace" ? "⌄" : "⌃";
+    toggle.title = mode === "replace" ? "置換を閉じる" : "置換を開く";
+  }
+}
+
+function openMarkdownPadSearchPanel(
+  view: EditorView,
+  mode: SearchPanelMode,
+) {
+  applySearchPanelMode(view, mode);
+  openSearchPanel(view);
+  applySearchPanelMode(view, mode);
+  view.dom
+    .querySelector<HTMLInputElement>(".cm-md-search-input")
+    ?.focus();
+}
+
+function button(
+  className: string,
+  label: string,
+  title: string,
+  onClick: () => void,
+) {
+  const element = document.createElement("button");
+  element.type = "button";
+  element.className = className;
+  element.textContent = label;
+  element.title = title;
+  element.ariaLabel = title;
+  element.addEventListener("click", (event) => {
+    event.preventDefault();
+    onClick();
+  });
+  return element;
+}
+
+class MarkdownPadSearchPanel implements Panel {
+  readonly dom: HTMLElement;
+  readonly top = true;
+
+  private readonly searchField: HTMLInputElement;
+  private readonly replaceField: HTMLInputElement;
+  private readonly caseButton: HTMLButtonElement;
+  private readonly wordButton: HTMLButtonElement;
+  private readonly regexpButton: HTMLButtonElement;
+
+  constructor(private readonly view: EditorView) {
+    const query = getSearchQuery(view.state);
+    const mode = searchPanelModes.get(view) ?? "search";
+    const root = document.createElement("div");
+    root.className = "cm-md-search-panel";
+    root.dataset.mode = mode;
+
+    const searchRow = document.createElement("div");
+    searchRow.className = "cm-md-search-row";
+
+    const modeToggle = button(
+      "cm-md-search-icon-button cm-md-search-mode-toggle",
+      mode === "replace" ? "⌄" : "⌃",
+      mode === "replace" ? "置換を閉じる" : "置換を開く",
+      () => {
+        const nextMode = root.dataset.mode === "replace" ? "search" : "replace";
+        applySearchPanelMode(view, nextMode);
+        this.searchField.focus();
+      },
+    );
+
+    this.searchField = document.createElement("input");
+    this.searchField.className = "cm-md-search-input";
+    this.searchField.name = "search";
+    this.searchField.placeholder = "検索する";
+    this.searchField.value = query.search;
+    this.searchField.setAttribute("main-field", "true");
+    this.searchField.autocomplete = "off";
+    this.searchField.spellcheck = false;
+    this.searchField.addEventListener("input", () => this.commitQuery());
+    this.searchField.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        (event.shiftKey ? findPreviousMatch : findNextMatch)(view);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeSearchPanel(view);
+        view.focus();
+      }
+    });
+
+    const searchFieldWrap = document.createElement("label");
+    searchFieldWrap.className = "cm-md-search-input-wrap";
+    searchFieldWrap.append(this.searchField);
+    const searchIcon = document.createElement("span");
+    searchIcon.className = "cm-md-search-input-icon";
+    searchIcon.textContent = "⌕";
+    searchFieldWrap.append(searchIcon);
+
+    searchRow.append(
+      modeToggle,
+      searchFieldWrap,
+      button("cm-md-search-icon-button", "↓", "次を検索", () =>
+        findNextMatch(view),
+      ),
+      button("cm-md-search-icon-button", "↑", "前を検索", () =>
+        findPreviousMatch(view),
+      ),
+    );
+
+    const options = document.createElement("div");
+    options.className = "cm-md-search-options";
+    this.caseButton = button("cm-md-search-toggle", "Aa", "大文字小文字を区別", () =>
+      this.toggleQueryOption("caseSensitive"),
+    );
+    this.wordButton = button("cm-md-search-toggle", "単", "単語単位で検索", () =>
+      this.toggleQueryOption("wholeWord"),
+    );
+    this.regexpButton = button("cm-md-search-toggle", ".*", "正規表現", () =>
+      this.toggleQueryOption("regexp"),
+    );
+    options.append(this.caseButton, this.wordButton, this.regexpButton);
+    searchRow.append(
+      button("cm-md-search-icon-button", "☷", "検索オプション", () => {
+        options.classList.toggle("open");
+      }),
+      button("cm-md-search-icon-button", "×", "閉じる", () => {
+        closeSearchPanel(view);
+        view.focus();
+      }),
+    );
+
+    const replaceRow = document.createElement("div");
+    replaceRow.className = "cm-md-replace-row";
+
+    this.replaceField = document.createElement("input");
+    this.replaceField.className = "cm-md-replace-input";
+    this.replaceField.name = "replace";
+    this.replaceField.placeholder = "置換";
+    this.replaceField.value = query.replace;
+    this.replaceField.autocomplete = "off";
+    this.replaceField.spellcheck = false;
+    this.replaceField.addEventListener("input", () => this.commitQuery());
+    this.replaceField.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        replaceNext(view);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        closeSearchPanel(view);
+        view.focus();
+      }
+    });
+
+    replaceRow.append(
+      this.replaceField,
+      button("cm-md-search-command-button", "置換", "次の一致を置換", () =>
+        replaceNext(view),
+      ),
+      button("cm-md-search-command-button", "すべて置換", "すべて置換", () =>
+        replaceAll(view),
+      ),
+    );
+
+    root.append(searchRow, options, replaceRow);
+    this.dom = root;
+    this.syncOptionButtons(query);
+  }
+
+  update(update: { state: EditorState }) {
+    const query = getSearchQuery(update.state);
+
+    if (this.searchField.value !== query.search) {
+      this.searchField.value = query.search;
+    }
+
+    if (this.replaceField.value !== query.replace) {
+      this.replaceField.value = query.replace;
+    }
+
+    this.syncOptionButtons(query);
+  }
+
+  private commitQuery(overrides: Partial<SearchQuery> = {}) {
+    const current = getSearchQuery(this.view.state);
+    const next = new SearchQuery({
+      search: this.searchField.value,
+      replace: this.replaceField.value,
+      caseSensitive: overrides.caseSensitive ?? current.caseSensitive,
+      regexp: overrides.regexp ?? current.regexp,
+      wholeWord: overrides.wholeWord ?? current.wholeWord,
+      literal: overrides.literal ?? current.literal,
+    });
+
+    this.view.dispatch({
+      effects: setSearchQuery.of(next),
+    });
+  }
+
+  private toggleQueryOption(
+    option: "caseSensitive" | "wholeWord" | "regexp",
+  ) {
+    const current = getSearchQuery(this.view.state);
+
+    this.commitQuery({
+      [option]: !current[option],
+    });
+    this.searchField.focus();
+  }
+
+  private syncOptionButtons(query: SearchQuery) {
+    this.caseButton.classList.toggle("active", query.caseSensitive);
+    this.wordButton.classList.toggle("active", query.wholeWord);
+    this.regexpButton.classList.toggle("active", query.regexp);
+  }
 }
 
 function editorTheme(zoom: number, wordWrap: boolean) {
@@ -307,34 +548,112 @@ function editorTheme(zoom: number, wordWrap: boolean) {
       fontSize: "0.86em",
     },
     ".cm-panels": {
-      borderTop: "1px solid #ddd6c8",
-      borderBottom: "1px solid #ddd6c8",
-      backgroundColor: "#fbfaf7",
+      borderTop: "0",
+      borderBottom: "1px solid #d0d8da",
+      backgroundColor: "#eef2f4",
       color: "#263233",
       fontFamily:
         '"Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif',
     },
-    ".cm-search": {
-      display: "flex",
-      flexWrap: "wrap",
+    ".cm-md-search-panel": {
+      display: "grid",
+      gap: "6px",
+      padding: "8px",
+      border: "1px solid #c5d0d3",
+      borderRadius: "8px",
+      margin: "8px",
+      backgroundColor: "#f9fbfb",
+      boxShadow: "0 8px 24px rgb(24 43 50 / 10%)",
+    },
+    ".cm-md-search-row": {
+      display: "grid",
+      gridTemplateColumns: "34px minmax(180px, 1fr) 34px 34px 34px 34px",
       gap: "6px",
       alignItems: "center",
-      padding: "8px 12px",
     },
-    ".cm-search input": {
-      minHeight: "28px",
-      border: "1px solid #c9d2d0",
-      borderRadius: "5px",
-      padding: "3px 7px",
+    ".cm-md-search-input-wrap": {
+      position: "relative",
+      display: "block",
+      minWidth: "0",
+    },
+    ".cm-md-search-input, .cm-md-replace-input": {
+      width: "100%",
+      minWidth: "0",
+      minHeight: "34px",
+      border: "1px solid #c7d3d5",
+      borderRadius: "6px",
+      padding: "4px 34px 4px 10px",
       backgroundColor: "#ffffff",
       color: "#202d30",
+      font: "inherit",
     },
-    ".cm-search button": {
-      minHeight: "28px",
-      border: "1px solid #c7d0ce",
-      borderRadius: "5px",
+    ".cm-md-search-input:focus, .cm-md-replace-input:focus": {
+      borderColor: "#7aa8b0",
+      outline: "none",
+      boxShadow: "0 0 0 2px rgb(122 168 176 / 22%)",
+    },
+    ".cm-md-search-input-icon": {
+      position: "absolute",
+      right: "10px",
+      top: "50%",
+      transform: "translateY(-50%)",
+      color: "#5e7074",
+      pointerEvents: "none",
+    },
+    ".cm-md-search-icon-button, .cm-md-search-command-button, .cm-md-search-toggle": {
+      minHeight: "34px",
+      border: "1px solid transparent",
+      borderRadius: "6px",
       backgroundColor: "#f4f7f6",
       color: "#263233",
+      font: "inherit",
+    },
+    ".cm-md-search-icon-button": {
+      width: "34px",
+      padding: "0",
+      fontSize: "16px",
+      lineHeight: "1",
+    },
+    ".cm-md-search-command-button": {
+      minWidth: "86px",
+      padding: "0 12px",
+    },
+    ".cm-md-search-icon-button:hover, .cm-md-search-command-button:hover, .cm-md-search-toggle:hover, .cm-md-search-toggle.active": {
+      borderColor: "#bed0d2",
+      backgroundColor: "#e7f0f1",
+    },
+    ".cm-md-search-options": {
+      display: "none",
+      gap: "6px",
+      paddingLeft: "40px",
+    },
+    ".cm-md-search-options.open": {
+      display: "flex",
+    },
+    ".cm-md-search-toggle": {
+      minWidth: "42px",
+      padding: "0 8px",
+      fontSize: "12px",
+    },
+    ".cm-md-replace-row": {
+      display: "grid",
+      gridTemplateColumns: "minmax(180px, 1fr) auto auto",
+      gap: "8px",
+      paddingLeft: "40px",
+    },
+    ".cm-md-search-panel[data-mode='search'] .cm-md-replace-row": {
+      display: "none",
+    },
+    "@media (max-width: 760px)": {
+      ".cm-md-search-row": {
+        gridTemplateColumns: "34px minmax(90px, 1fr) 34px 34px 34px 34px",
+      },
+      ".cm-md-replace-row": {
+        gridTemplateColumns: "minmax(90px, 1fr)",
+      },
+      ".cm-md-search-command-button": {
+        width: "100%",
+      },
     },
   });
 }
@@ -380,15 +699,29 @@ function MarkdownEditor({
       const view = viewRef.current;
 
       if (view) {
-        openSearchPanel(view);
-        view.focus();
+        openMarkdownPadSearchPanel(view, "search");
       }
     },
     openReplace() {
       const view = viewRef.current;
 
       if (view) {
-        openSearchPanel(view);
+        openMarkdownPadSearchPanel(view, "replace");
+      }
+    },
+    findNext() {
+      const view = viewRef.current;
+
+      if (view) {
+        findNextMatch(view);
+        view.focus();
+      }
+    },
+    findPrevious() {
+      const view = viewRef.current;
+
+      if (view) {
+        findPreviousMatch(view);
         view.focus();
       }
     },
@@ -474,6 +807,9 @@ function MarkdownEditor({
         }),
         search({
           top: true,
+          createPanel(view) {
+            return new MarkdownPadSearchPanel(view);
+          },
         }),
         highlightSelectionMatches(),
         highlightActiveLine(),

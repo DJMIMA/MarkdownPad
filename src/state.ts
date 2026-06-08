@@ -43,7 +43,7 @@ export function createUntitledTab(index: number): DocumentTab {
     id: crypto.randomUUID(),
     title: `無題-${index}`,
     path: null,
-    content: index === 1 ? sampleMarkdown : "",
+    content: "",
     dirty: false,
     cursor: {
       anchor: 0,

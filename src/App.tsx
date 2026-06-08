@@ -14,6 +14,9 @@ import {
   saveRecoverySnapshot,
   isTauriRuntime,
   openExternalUrl,
+  openApplicationWindow,
+  closeCurrentWindow,
+  listenToCloseRequested,
 } from "./platform";
 import {
   countWords,
@@ -27,6 +30,7 @@ import type { DocumentTab, EditorSettings } from "./types";
 type MenuItem = {
   action: MenuAction;
   label: string;
+  shortcut?: string;
   checked?: boolean;
   separatorBefore?: boolean;
 };
@@ -37,20 +41,57 @@ type MenuGroup = {
   items: MenuItem[];
 };
 
+type UnsavedDialogDecision = "save" | "discard" | "cancel";
+
+type UnsavedDialogState = {
+  title: string;
+  message: string;
+  resolve: (decision: UnsavedDialogDecision) => void;
+};
+
+type ShortcutCommand = MenuAction | "find-next" | "find-previous";
+
 function menuGroups(settings: EditorSettings): MenuGroup[] {
   return [
     {
       id: "file",
       label: "ファイル",
       items: [
-        { action: "new-tab", label: "新しいタブ" },
-        { action: "new-window", label: "新しいウインドウ" },
-        { action: "open", label: "開く", separatorBefore: true },
-        { action: "save", label: "保存" },
-        { action: "save-as", label: "名前を付けて保存" },
-        { action: "print", label: "印刷", separatorBefore: true },
-        { action: "close-tab", label: "タブを閉じる", separatorBefore: true },
-        { action: "close-window", label: "ウィンドウを閉じる" },
+        { action: "new-tab", label: "新しいタブ", shortcut: "Ctrl+N" },
+        {
+          action: "new-window",
+          label: "新しいウインドウ",
+          shortcut: "Ctrl+Shift+N",
+        },
+        {
+          action: "open",
+          label: "開く",
+          shortcut: "Ctrl+O",
+          separatorBefore: true,
+        },
+        { action: "save", label: "保存", shortcut: "Ctrl+S" },
+        {
+          action: "save-as",
+          label: "名前を付けて保存",
+          shortcut: "Ctrl+Shift+S",
+        },
+        {
+          action: "print",
+          label: "印刷",
+          shortcut: "Ctrl+P",
+          separatorBefore: true,
+        },
+        {
+          action: "close-tab",
+          label: "タブを閉じる",
+          shortcut: "Ctrl+W",
+          separatorBefore: true,
+        },
+        {
+          action: "close-window",
+          label: "ウィンドウを閉じる",
+          shortcut: "Ctrl+Shift+W",
+        },
         { action: "quit", label: "終了" },
       ],
     },
@@ -58,21 +99,31 @@ function menuGroups(settings: EditorSettings): MenuGroup[] {
       id: "edit",
       label: "編集",
       items: [
-        { action: "cut", label: "切り取り" },
-        { action: "copy", label: "コピー" },
-        { action: "paste", label: "貼り付け" },
-        { action: "find", label: "検索", separatorBefore: true },
-        { action: "replace", label: "置換" },
-        { action: "select-all", label: "全てを選択", separatorBefore: true },
+        { action: "cut", label: "切り取り", shortcut: "Ctrl+X" },
+        { action: "copy", label: "コピー", shortcut: "Ctrl+C" },
+        { action: "paste", label: "貼り付け", shortcut: "Ctrl+V" },
+        {
+          action: "find",
+          label: "検索",
+          shortcut: "Ctrl+F",
+          separatorBefore: true,
+        },
+        { action: "replace", label: "置換", shortcut: "Ctrl+H" },
+        {
+          action: "select-all",
+          label: "全てを選択",
+          shortcut: "Ctrl+A",
+          separatorBefore: true,
+        },
       ],
     },
     {
       id: "view",
       label: "表示",
       items: [
-        { action: "zoom-in", label: "拡大" },
-        { action: "zoom-out", label: "縮小" },
-        { action: "zoom-reset", label: "既定値に戻す" },
+        { action: "zoom-in", label: "拡大", shortcut: "Ctrl++" },
+        { action: "zoom-out", label: "縮小", shortcut: "Ctrl+-" },
+        { action: "zoom-reset", label: "既定値に戻す", shortcut: "Ctrl+0" },
         {
           action: "toggle-word-wrap",
           label: "右端で折り返す",
@@ -87,6 +138,54 @@ function menuGroups(settings: EditorSettings): MenuGroup[] {
       ],
     },
   ];
+}
+
+function shortcutCommandFromEvent(event: KeyboardEvent): ShortcutCommand | null {
+  if (event.altKey) {
+    return null;
+  }
+
+  if (
+    event.key === "F3" &&
+    !event.ctrlKey &&
+    !event.metaKey
+  ) {
+    return event.shiftKey ? "find-previous" : "find-next";
+  }
+
+  const hasPrimaryModifier = event.ctrlKey || event.metaKey;
+
+  if (!hasPrimaryModifier) {
+    return null;
+  }
+
+  const key = event.key.toLowerCase();
+
+  switch (key) {
+    case "n":
+      return event.shiftKey ? "new-window" : "new-tab";
+    case "o":
+      return event.shiftKey ? null : "open";
+    case "s":
+      return event.shiftKey ? "save-as" : "save";
+    case "p":
+      return event.shiftKey ? null : "print";
+    case "w":
+      return event.shiftKey ? "close-window" : "close-tab";
+    case "f":
+      return event.shiftKey ? null : "find";
+    case "h":
+      return event.shiftKey ? null : "replace";
+    case "+":
+    case "=":
+      return "zoom-in";
+    case "-":
+      return "zoom-out";
+    case "0":
+      return "zoom-reset";
+    default:
+      return null;
+  }
 }
 
 function commandEdit(action: "cut" | "copy" | "paste") {
@@ -110,6 +209,14 @@ function updateTabById(
 
 function App() {
   const editorRef = useRef<MarkdownEditorHandle | null>(null);
+  const handleActionRef = useRef<((action: MenuAction) => Promise<void>) | null>(
+    null,
+  );
+  const unsavedDialogRef = useRef<UnsavedDialogState | null>(null);
+  const skipRecovery = useMemo(
+    () => new URLSearchParams(window.location.search).has("blank"),
+    [],
+  );
   const [tabs, setTabs] = useState<DocumentTab[]>(() => [createUntitledTab(1)]);
   const [activeTabId, setActiveTabId] = useState(() => tabs[0].id);
   const [settings, setSettings] = useState<EditorSettings>(
@@ -117,6 +224,8 @@ function App() {
   );
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [recoveryReady, setRecoveryReady] = useState(false);
+  const [unsavedDialog, setUnsavedDialog] =
+    useState<UnsavedDialogState | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const nextUntitledIndex = tabs.filter((tab) => tab.isUntitled).length + 1;
@@ -147,14 +256,81 @@ function App() {
     setActiveTabId(tab.id);
   }, [nextUntitledIndex]);
 
+  const requestUnsavedDecision = useCallback((tabsToClose: DocumentTab[]) => {
+    const message = tabsToClose.length === 1
+      ? `${tabsToClose[0].title} への変更内容を保存しますか？`
+      : `未保存のタブ ${tabsToClose.length} 件への変更内容を保存しますか？`;
+
+    return new Promise<UnsavedDialogDecision>((resolve) => {
+      setUnsavedDialog({
+        title: "MarkdownPad",
+        message,
+        resolve,
+      });
+    });
+  }, []);
+
+  const chooseUnsavedDialog = useCallback(
+    (decision: UnsavedDialogDecision) => {
+      const dialog = unsavedDialog;
+
+      if (!dialog) {
+        return;
+      }
+
+      setUnsavedDialog(null);
+      dialog.resolve(decision);
+    },
+    [unsavedDialog],
+  );
+
+  const saveTabBeforeClose = useCallback(async (tab: DocumentTab) => {
+    try {
+      const saved = await saveMarkdownFile(tab, {
+        saveAs: tab.path === null,
+      });
+
+      setTabs((currentTabs) => updateTabById(currentTabs, tab.id, saved));
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const dirtyTabsCanClose = useCallback(
+    async (tabsToClose: DocumentTab[]) => {
+      const dirtyTabs = tabsToClose.filter((tab) => tab.dirty);
+
+      if (dirtyTabs.length === 0) {
+        return true;
+      }
+
+      const decision = await requestUnsavedDecision(dirtyTabs);
+
+      if (decision === "cancel") {
+        return false;
+      }
+
+      if (decision === "discard") {
+        return true;
+      }
+
+      for (const tab of dirtyTabs) {
+        if (!(await saveTabBeforeClose(tab))) {
+          return false;
+        }
+      }
+
+      return true;
+    },
+    [requestUnsavedDecision, saveTabBeforeClose],
+  );
+
   const closeTab = useCallback(
-    (tabId: string) => {
+    async (tabId: string) => {
       const targetTab = tabs.find((tab) => tab.id === tabId);
 
-      if (
-        targetTab?.dirty &&
-        !window.confirm(`${targetTab.title} には未保存の変更があります。閉じますか？`)
-      ) {
+      if (!targetTab || !(await dirtyTabsCanClose([targetTab]))) {
         return;
       }
 
@@ -174,7 +350,7 @@ function App() {
         setActiveTabId(remainingTabs[nextIndex].id);
       }
     },
-    [activeTabId, tabs],
+    [activeTabId, dirtyTabsCanClose, tabs],
   );
 
   const openFile = useCallback(async () => {
@@ -216,18 +392,6 @@ function App() {
     [activeTab, updateActiveTab],
   );
 
-  const allDirtyTabsCanClose = useCallback(() => {
-    const dirtyTabs = tabs.filter((tab) => tab.dirty);
-
-    if (dirtyTabs.length === 0) {
-      return true;
-    }
-
-    return window.confirm(
-      `未保存のタブが ${dirtyTabs.length} 件あります。変更を破棄して閉じますか？`,
-    );
-  }, [tabs]);
-
   const handleAction = useCallback(
     async (action: MenuAction) => {
       setOpenMenuId(null);
@@ -237,7 +401,7 @@ function App() {
           addTab();
           break;
         case "new-window":
-          window.open(window.location.href, "_blank", "noopener,noreferrer");
+          await openApplicationWindow();
           break;
         case "open":
           await openFile();
@@ -254,12 +418,12 @@ function App() {
           );
           break;
         case "close-tab":
-          closeTab(activeTab.id);
+          await closeTab(activeTab.id);
           break;
         case "close-window":
         case "quit":
-          if (allDirtyTabsCanClose()) {
-            window.close();
+          if (await dirtyTabsCanClose(tabs)) {
+            await closeCurrentWindow();
           }
           break;
         case "cut":
@@ -314,14 +478,28 @@ function App() {
     [
       activeTab,
       addTab,
-      allDirtyTabsCanClose,
       closeTab,
+      dirtyTabsCanClose,
       openFile,
       saveActiveTab,
+      tabs,
     ],
   );
 
   useEffect(() => {
+    handleActionRef.current = handleAction;
+  }, [handleAction]);
+
+  useEffect(() => {
+    unsavedDialogRef.current = unsavedDialog;
+  }, [unsavedDialog]);
+
+  useEffect(() => {
+    if (skipRecovery) {
+      setRecoveryReady(true);
+      return;
+    }
+
     let mounted = true;
 
     loadRecoverySnapshot().then((snapshot) => {
@@ -341,10 +519,10 @@ function App() {
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [skipRecovery]);
 
   useEffect(() => {
-    if (!recoveryReady) {
+    if (!recoveryReady || skipRecovery) {
       return;
     }
 
@@ -359,32 +537,102 @@ function App() {
     }, 350);
 
     return () => window.clearTimeout(timeoutId);
-  }, [activeTabId, recoveryReady, settings, tabs]);
+  }, [activeTabId, recoveryReady, settings, skipRecovery, tabs]);
 
   useEffect(() => {
+    let disposed = false;
     let unlisten: (() => void) | null = null;
 
     listenToMenuActions((action) => {
-      void handleAction(action);
+      void handleActionRef.current?.(action);
     }).then((cleanup) => {
+      if (disposed) {
+        cleanup?.();
+        return;
+      }
+
       unlisten = cleanup;
     });
 
     return () => {
+      disposed = true;
       unlisten?.();
     };
-  }, [handleAction]);
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    listenToCloseRequested(() => {
+      void handleActionRef.current?.("close-window");
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup?.();
+        return;
+      }
+
+      unlisten = cleanup;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      if (unsavedDialogRef.current) {
+        return;
+      }
+
       if (event.key === "Escape") {
         setOpenMenuId(null);
+        return;
       }
+
+      const command = shortcutCommandFromEvent(event);
+
+      if (!command) {
+        return;
+      }
+
+      event.preventDefault();
+      setOpenMenuId(null);
+
+      if (command === "find-next") {
+        editorRef.current?.findNext();
+        return;
+      }
+
+      if (command === "find-previous") {
+        editorRef.current?.findPrevious();
+        return;
+      }
+
+      void handleActionRef.current?.(command);
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  useEffect(() => {
+    if (!unsavedDialog) {
+      return;
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        chooseUnsavedDialog("cancel");
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [chooseUnsavedDialog, unsavedDialog]);
 
   useEffect(() => {
     function onOpenUrl(event: Event) {
@@ -434,11 +682,10 @@ function App() {
                         onClick={() => void handleAction(item.action)}
                       >
                         <span>{item.label}</span>
-                        {item.checked !== undefined ? (
-                          <span className="menu-check" aria-hidden="true">
-                            {item.checked ? "✓" : ""}
-                          </span>
-                        ) : null}
+                        <span className="menu-shortcut">{item.shortcut ?? ""}</span>
+                        <span className="menu-check" aria-hidden="true">
+                          {item.checked ? "✓" : ""}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -468,13 +715,13 @@ function App() {
                 tabIndex={0}
                 onClick={(event) => {
                   event.stopPropagation();
-                  closeTab(tab.id);
+                  void closeTab(tab.id);
                 }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
                     event.stopPropagation();
-                    closeTab(tab.id);
+                    void closeTab(tab.id);
                   }
                 }}
               >
@@ -527,6 +774,43 @@ function App() {
           <span>{activeTab.dirty ? "未保存" : "保存済み"}</span>
           <span>{settings.wordWrap ? "折り返し" : "折り返しなし"}</span>
         </footer>
+      ) : null}
+
+      {unsavedDialog ? (
+        <div className="dialog-backdrop" role="presentation">
+          <section
+            className="unsaved-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="unsaved-dialog-title"
+            aria-describedby="unsaved-dialog-message"
+          >
+            <h2 id="unsaved-dialog-title">{unsavedDialog.title}</h2>
+            <p id="unsaved-dialog-message">{unsavedDialog.message}</p>
+            <div className="unsaved-dialog-actions">
+              <button
+                type="button"
+                className="primary"
+                autoFocus
+                onClick={() => chooseUnsavedDialog("save")}
+              >
+                保存
+              </button>
+              <button
+                type="button"
+                onClick={() => chooseUnsavedDialog("discard")}
+              >
+                保存しない
+              </button>
+              <button
+                type="button"
+                onClick={() => chooseUnsavedDialog("cancel")}
+              >
+                キャンセル
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
     </div>
   );

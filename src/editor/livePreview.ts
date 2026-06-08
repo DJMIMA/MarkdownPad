@@ -236,6 +236,7 @@ function dispatchOpenUrl(url: string) {
 const suppressedVisualLineClicks = new WeakMap<EditorView, number>();
 const draggedVisualLineClicks = new WeakMap<EditorView, number>();
 const tableCellSelections = new WeakMap<EditorView, TableCellSelection>();
+const tableCellSelectionMenus = new WeakMap<EditorView, HTMLElement>();
 
 function suppressNextVisualLineClick(view: EditorView) {
   const token = Date.now();
@@ -279,12 +280,26 @@ function consumeDraggedVisualLineClick(view: EditorView) {
   return true;
 }
 
+function removeTableCellSelectionMenu(view: EditorView) {
+  const menu = tableCellSelectionMenus.get(view);
+
+  if (!menu) {
+    return;
+  }
+
+  menu.remove();
+  tableCellSelectionMenus.delete(view);
+}
+
 function clearTableCellSelection(view: EditorView) {
   const selection = tableCellSelections.get(view);
 
   if (!selection) {
+    removeTableCellSelectionMenu(view);
     return;
   }
+
+  removeTableCellSelectionMenu(view);
 
   if (selection.wrapper.isConnected) {
     selection.wrapper
@@ -295,9 +310,153 @@ function clearTableCellSelection(view: EditorView) {
   tableCellSelections.delete(view);
 }
 
+function selectedTableCellRect(selection: TableCellSelection) {
+  let selectedRect: DOMRect | null = null;
+
+  for (const cell of selection.wrapper.querySelectorAll<HTMLElement>(
+    ".cm-md-table-cell-selected",
+  )) {
+    const rect = cell.getBoundingClientRect();
+
+    if (!selectedRect) {
+      selectedRect = rect;
+      continue;
+    }
+
+    const left = Math.min(selectedRect.left, rect.left);
+    const top = Math.min(selectedRect.top, rect.top);
+    const right = Math.max(selectedRect.right, rect.right);
+    const bottom = Math.max(selectedRect.bottom, rect.bottom);
+    selectedRect = new DOMRect(left, top, right - left, bottom - top);
+  }
+
+  return selectedRect;
+}
+
+function clampMenuPosition(value: number, size: number, max: number) {
+  return Math.max(6, Math.min(value, Math.max(6, max - size - 6)));
+}
+
+async function writeClipboardText(text: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall back to the older copy command below.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.readOnly = true;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.append(textarea);
+  textarea.select();
+
+  try {
+    return document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
+}
+
+async function copyTableCellSelection(view: EditorView) {
+  const selection = tableCellSelections.get(view);
+
+  if (!selection) {
+    return false;
+  }
+
+  return writeClipboardText(tableCellSelectionText(selection));
+}
+
+async function cutTableCellSelection(view: EditorView) {
+  if (!(await copyTableCellSelection(view))) {
+    return false;
+  }
+
+  deleteTableCellSelection(view);
+  return true;
+}
+
+function showTableCellSelectionMenu(
+  view: EditorView,
+  selection: TableCellSelection,
+  anchor?: { x: number; y: number },
+) {
+  removeTableCellSelectionMenu(view);
+
+  const selectedRect = selectedTableCellRect(selection);
+
+  if (!selectedRect && !anchor) {
+    return;
+  }
+
+  const menu = document.createElement("div");
+  menu.className = "cm-md-table-selection-menu";
+  menu.role = "menu";
+  menu.ariaLabel = "表セル編集";
+  menu.style.visibility = "hidden";
+
+  const addButton = (
+    label: string,
+    action: () => Promise<void> | void,
+  ) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.role = "menuitem";
+    button.textContent = label;
+    button.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void Promise.resolve(action()).finally(() => {
+        removeTableCellSelectionMenu(view);
+        view.focus();
+      });
+    });
+    menu.append(button);
+  };
+
+  addButton("コピー", async () => {
+    await copyTableCellSelection(view);
+  });
+  addButton("切り取り", async () => {
+    await cutTableCellSelection(view);
+  });
+  addButton("削除", () => {
+    deleteTableCellSelection(view);
+  });
+
+  document.body.append(menu);
+
+  const menuRect = menu.getBoundingClientRect();
+  const left = anchor?.x ?? selectedRect?.left ?? 0;
+  const bottom = anchor?.y ?? selectedRect?.bottom ?? 0;
+  let top = bottom + 8;
+
+  if (top + menuRect.height > window.innerHeight - 6) {
+    top = bottom - menuRect.height - 8;
+  }
+
+  menu.style.left = `${clampMenuPosition(left, menuRect.width, window.innerWidth)}px`;
+  menu.style.top = `${clampMenuPosition(top, menuRect.height, window.innerHeight)}px`;
+  menu.style.visibility = "visible";
+  tableCellSelectionMenus.set(view, menu);
+}
+
 function setTableCellSelection(
   view: EditorView,
   selection: TableCellSelection,
+  options: {
+    menuAnchor?: { x: number; y: number };
+  } = {},
 ) {
   const current = tableCellSelections.get(view);
 
@@ -306,6 +465,24 @@ function setTableCellSelection(
   }
 
   tableCellSelections.set(view, selection);
+
+  if (options.menuAnchor) {
+    showTableCellSelectionMenu(view, selection, options.menuAnchor);
+  } else {
+    removeTableCellSelectionMenu(view);
+  }
+}
+
+function tableCellSelectionContainsPosition(
+  selection: TableCellSelection,
+  position: TableCellPosition,
+) {
+  return (
+    selection.rowFrom <= position.row &&
+    selection.rowTo >= position.row &&
+    selection.columnFrom <= position.column &&
+    selection.columnTo >= position.column
+  );
 }
 
 function tableCellSelectionText(selection: TableCellSelection) {
@@ -743,6 +920,19 @@ const sourceLineNavigation = ViewPlugin.fromClass(
       event.stopImmediatePropagation();
     };
 
+    private readonly handleCut = (event: ClipboardEvent) => {
+      const selection = tableCellSelections.get(this.view);
+
+      if (!selection || !event.clipboardData) {
+        return;
+      }
+
+      event.clipboardData.setData("text/plain", tableCellSelectionText(selection));
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      deleteTableCellSelection(this.view);
+    };
+
     private readonly handleKeyDown = (event: KeyboardEvent) => {
       if (tableCellSelections.has(this.view)) {
         if (event.key === "Backspace" || event.key === "Delete") {
@@ -789,11 +979,13 @@ const sourceLineNavigation = ViewPlugin.fromClass(
     constructor(view: EditorView) {
       this.view = view;
       this.view.contentDOM.addEventListener("copy", this.handleCopy, true);
+      this.view.contentDOM.addEventListener("cut", this.handleCut, true);
       this.view.contentDOM.addEventListener("keydown", this.handleKeyDown, true);
     }
 
     destroy() {
       this.view.contentDOM.removeEventListener("copy", this.handleCopy, true);
+      this.view.contentDOM.removeEventListener("cut", this.handleCut, true);
       this.view.contentDOM.removeEventListener("keydown", this.handleKeyDown, true);
     }
   },
@@ -1305,6 +1497,14 @@ class TableWidget extends WidgetType {
         stopEvent.preventDefault();
         stopEvent.stopPropagation();
         view.focus();
+        const selection = tableCellSelections.get(view);
+
+        if (selection) {
+          showTableCellSelectionMenu(view, selection, {
+            x: stopEvent.clientX,
+            y: stopEvent.clientY,
+          });
+        }
         return;
       }
 
@@ -1319,6 +1519,54 @@ class TableWidget extends WidgetType {
     window.addEventListener("mouseup", stop, true);
   }
 
+  private handleTableContextMenu(
+    event: MouseEvent,
+    view: EditorView,
+    wrapper: HTMLElement,
+  ) {
+    const targetCell = this.tableCellForEvent(event);
+
+    if (!targetCell) {
+      return;
+    }
+
+    const targetPosition = this.cellPosition(targetCell);
+
+    if (!targetPosition) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const currentSelection = tableCellSelections.get(view);
+
+    if (
+      currentSelection?.wrapper === wrapper &&
+      tableCellSelectionContainsPosition(currentSelection, targetPosition)
+    ) {
+      showTableCellSelectionMenu(view, currentSelection, {
+        x: event.clientX,
+        y: event.clientY,
+      });
+      view.focus();
+      return;
+    }
+
+    clearTableCellSelection(view);
+    setTableCellSelection(
+      view,
+      this.markCellSelection(wrapper, targetPosition, targetPosition),
+      {
+        menuAnchor: {
+          x: event.clientX,
+          y: event.clientY,
+        },
+      },
+    );
+    view.focus();
+  }
+
   toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-table-wrapper";
@@ -1329,6 +1577,9 @@ class TableWidget extends WidgetType {
 
     wrapper.addEventListener("mousedown", (event) =>
       this.handleTablePointerDown(event, view, wrapper),
+    );
+    wrapper.addEventListener("contextmenu", (event) =>
+      this.handleTableContextMenu(event, view, wrapper),
     );
     wrapper.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {

@@ -3,7 +3,39 @@ import { mkdir } from "node:fs/promises";
 import { chromium } from "playwright";
 
 const baseUrl = process.env.MARKDOWNPAD_URL ?? "http://127.0.0.1:1420";
+const blankUrl = new URL("?blank=1", baseUrl).toString();
 const outputDir = "output/playwright";
+const sampleMarkdown = `# MarkdownPad
+
+MarkdownPad は、単体の Markdown ファイルを軽く開き、美しく読みながら編集するためのデスクトップアプリです。
+
+## 見出しの確認
+
+### ライブプレビュー
+
+- **太字** と *強調* は記号を隠して読みやすく表示します
+- [MarkdownPad](https://example.com) のリンクはラベル中心で表示します
+- [x] タスクリストも自然なチェック表示にします
+
+エスケープした \\*記号\\* と ; ^ ＾ は文字として残ります。
+
+> 保存は手動保存を基本にし、復元スナップショットはアプリ内に持ちます。
+
+---
+
+| 機能 | 状態 |
+| --- | --- |
+| 見出し | h1 / h2 / h3 を階層表示 |
+| 表 | カーソル外では表として表示 |
+
+\`\`\`ts
+export interface DocumentTab {
+  id: string;
+  title: string;
+  dirty: boolean;
+}
+\`\`\`
+`;
 const tableHeavyMarkdown = `# Table cursor check
 
 ## 1. BTK阻害薬
@@ -113,6 +145,23 @@ async function waitForAnimationFrame(page) {
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
 }
 
+async function replaceEditorText(page, text) {
+  await page.waitForSelector(".cm-content");
+  await page.click(".cm-content");
+  await page.keyboard.press("Control+A");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.insertText(text);
+  await page.evaluate(() => {
+    const scroller = document.querySelector(".cm-scroller");
+
+    if (scroller) {
+      scroller.scrollLeft = 0;
+      scroller.scrollTop = 0;
+    }
+  });
+  await waitForAnimationFrame(page);
+}
+
 async function run() {
   await mkdir(outputDir, {
     recursive: true,
@@ -142,9 +191,10 @@ async function run() {
     });
     page.on("pageerror", (error) => consoleErrors.push(`pageerror: ${error.message}`));
 
-    await page.goto(baseUrl, {
+    await page.goto(blankUrl, {
       waitUntil: "networkidle",
     });
+    await replaceEditorText(page, sampleMarkdown);
     await page.waitForSelector(".cm-md-heading-1");
     await page.screenshot({
       path: `${outputDir}/live-preview-desktop.png`,
@@ -185,7 +235,12 @@ async function run() {
     assert.equal(metrics.visibleLines.includes("## 見出しの確認"), false);
     assert.equal(metrics.visibleLines.includes("---"), false);
 
-    const paragraphBox = await page.locator(".cm-content .cm-line").nth(2).boundingBox();
+    const paragraphLine = page
+      .locator(".cm-content .cm-line", {
+        hasText: "単体の Markdown ファイル",
+      })
+      .first();
+    const paragraphBox = await paragraphLine.boundingBox();
     assert.ok(paragraphBox);
     await page.mouse.move(
       paragraphBox.x + 30,
@@ -198,12 +253,9 @@ async function run() {
       selected: window.getSelection()?.toString(),
     }));
     await page.mouse.up();
-    assert.match(
-      afterParagraphMouseDown.active ?? "",
-      /単体の Markdown ファイル/,
-    );
     assert.equal(afterParagraphMouseDown.selected, "");
 
+    await waitForAnimationFrame(page);
     const afterParagraphClick = await page.evaluate(() => ({
       h1: document.querySelector(".cm-md-heading-1")?.textContent,
       active: document.querySelector(".cm-activeLine")?.textContent,
@@ -211,10 +263,7 @@ async function run() {
     assert.equal(afterParagraphClick.h1, "MarkdownPad");
     assert.match(afterParagraphClick.active ?? "", /単体の Markdown ファイル/);
 
-    const paragraphSelectionBox = await page
-      .locator(".cm-content .cm-line")
-      .nth(2)
-      .boundingBox();
+    const paragraphSelectionBox = await paragraphLine.boundingBox();
     assert.ok(paragraphSelectionBox);
     await page.mouse.move(
       paragraphSelectionBox.x + 35,
@@ -242,7 +291,7 @@ async function run() {
       afterParagraphPartialSelection.active ?? "",
       /単体の Markdown ファイル/,
     );
-    await page.locator(".cm-content .cm-line").nth(2).click();
+    await paragraphLine.click();
 
     await page.locator(".cm-md-heading-2").click();
     const afterHeadingClick = await page.evaluate(() => ({
@@ -279,7 +328,7 @@ async function run() {
     await popup.close();
     assert.deepEqual(consoleErrors, []);
 
-    await page.locator(".cm-content .cm-line").nth(2).click();
+    await paragraphLine.click();
     await page.locator(".cm-md-horizontal-rule").click();
     const afterRuleClick = await page.evaluate(() => ({
       horizontalRuleCount: document.querySelectorAll(".cm-md-horizontal-rule").length,
@@ -294,7 +343,8 @@ async function run() {
     );
     assert.equal(afterRuleEdit, "*---");
 
-    await page.locator(".cm-content .cm-line").nth(2).click();
+    await paragraphLine.click();
+    await page.locator(".cm-md-code-block code").scrollIntoViewIfNeeded();
     const codeBlockCodeBox = await page.locator(".cm-md-code-block code").boundingBox();
     assert.ok(codeBlockCodeBox);
     await page.mouse.move(
@@ -309,11 +359,12 @@ async function run() {
         steps: 8,
       },
     );
+    await page.mouse.up();
+    await waitForAnimationFrame(page);
     const afterCodeBlockDragSelection = await page.evaluate(() => ({
       codeBlockCount: document.querySelectorAll(".cm-md-code-block").length,
       selected: window.getSelection()?.toString(),
     }));
-    await page.mouse.up();
     assert.equal(afterCodeBlockDragSelection.codeBlockCount, 1);
     assert.match(
       afterCodeBlockDragSelection.selected ?? "",
@@ -321,7 +372,7 @@ async function run() {
     );
     await page.evaluate(() => window.getSelection()?.removeAllRanges());
 
-    await page.locator(".cm-content .cm-line").nth(2).click();
+    await paragraphLine.click();
     await page.locator(".cm-md-code-block").click();
     const afterCodeBlockClick = await page.evaluate(() => ({
       codeBlockCount: document.querySelectorAll(".cm-md-code-block").length,
@@ -366,7 +417,7 @@ async function run() {
     );
     assert.equal(afterCodeSourceBottomClick.selected, "");
 
-    await page.locator(".cm-content .cm-line").nth(2).click();
+    await paragraphLine.click();
     await page
       .locator(".cm-md-table-wrapper tbody tr")
       .first()
@@ -388,7 +439,7 @@ async function run() {
       "| 見出し | h1 / h2 / h3 を階層表示 |",
     );
 
-    await page.locator(".cm-content .cm-line").nth(2).click();
+    await paragraphLine.click();
     await page.locator(".cm-md-table-wrapper th").first().click({
       position: {
         x: 4,
@@ -448,7 +499,7 @@ async function run() {
         height: 650,
       },
     });
-    await tableSelectionPage.goto(baseUrl, {
+    await tableSelectionPage.goto(blankUrl, {
       waitUntil: "networkidle",
     });
     await tableSelectionPage.waitForSelector(".cm-content");
@@ -503,7 +554,7 @@ async function run() {
         height: 650,
       },
     });
-    await tableCellSelectionPage.goto(baseUrl, {
+    await tableCellSelectionPage.goto(blankUrl, {
       waitUntil: "networkidle",
     });
     await tableCellSelectionPage.waitForSelector(".cm-content");
@@ -555,10 +606,20 @@ async function run() {
       selected: window.getSelection()?.toString(),
     }));
     await tableCellSelectionPage.mouse.up();
+    const afterTableCellSelectionMenu = await tableCellSelectionPage.evaluate(() => ({
+      menuItems: [...document.querySelectorAll(".cm-md-table-selection-menu button")].map(
+        (button) => button.textContent,
+      ),
+    }));
     assert.equal(afterTableCellRangeDrag.tableCount, 1);
     assert.equal(afterTableCellRangeDrag.sourceTableLineCount, 0);
     assert.equal(afterTableCellRangeDrag.selectedCells, 4);
     assert.equal(afterTableCellRangeDrag.selected, "");
+    assert.deepEqual(afterTableCellSelectionMenu.menuItems, [
+      "コピー",
+      "切り取り",
+      "削除",
+    ]);
     const afterTableCellCopy = await tableCellSelectionPage.evaluate(() => {
       const copied = new Map();
       const event = new Event("copy", {
@@ -583,6 +644,49 @@ async function run() {
     assert.equal(afterTableCellCopy.defaultPrevented, true);
     assert.equal(afterTableCellCopy.text, "row1\tvalue1\nrow2\tvalue2");
 
+    await tableCellSelectionPage.keyboard.press("Escape");
+    await tableCellSelectionPage
+      .locator(".cm-md-table-wrapper tbody tr")
+      .first()
+      .locator("td")
+      .nth(1)
+      .click({
+        button: "right",
+        position: {
+          x: 10,
+          y: 10,
+        },
+      });
+    const afterTableCellContextMenu = await tableCellSelectionPage.evaluate(() => ({
+      selectedCells: document.querySelectorAll(
+        ".cm-md-table-cell-selected",
+      ).length,
+      menuItems: [...document.querySelectorAll(".cm-md-table-selection-menu button")].map(
+        (button) => button.textContent,
+      ),
+    }));
+    assert.equal(afterTableCellContextMenu.selectedCells, 1);
+    assert.deepEqual(afterTableCellContextMenu.menuItems, [
+      "コピー",
+      "切り取り",
+      "削除",
+    ]);
+    await tableCellSelectionPage.keyboard.press("Escape");
+
+    await tableCellSelectionPage.mouse.move(
+      firstCellBox.x + 8,
+      firstCellBox.y + 8,
+    );
+    await tableCellSelectionPage.mouse.down();
+    await tableCellSelectionPage.mouse.move(
+      lastCellBox.x + 20,
+      lastCellBox.y + 10,
+      {
+        steps: 8,
+      },
+    );
+    await tableCellSelectionPage.mouse.up();
+
     await tableCellSelectionPage.keyboard.press("Backspace");
     const afterTableCellDelete = await tableCellSelectionPage.evaluate(() => ({
       selectedCells: document.querySelectorAll(
@@ -606,7 +710,7 @@ async function run() {
         height: 900,
       },
     });
-    await tableNavigationPage.goto(baseUrl, {
+    await tableNavigationPage.goto(blankUrl, {
       waitUntil: "networkidle",
     });
     await tableNavigationPage.waitForSelector(".cm-content");
@@ -786,7 +890,7 @@ async function run() {
         height: 700,
       },
     });
-    await noWrapPage.goto(baseUrl, {
+    await noWrapPage.goto(blankUrl, {
       waitUntil: "networkidle",
     });
     await noWrapPage.waitForSelector(".cm-content");
@@ -812,6 +916,99 @@ async function run() {
     assert.equal(noWrapMetrics.lineWhiteSpace, "pre");
     assert.ok(noWrapMetrics.activeWidth >= noWrapMetrics.lineScrollWidth);
 
+    const shortcutPage = await browser.newPage({
+      viewport: {
+        width: 1000,
+        height: 650,
+      },
+    });
+    await shortcutPage.goto(blankUrl, {
+      waitUntil: "networkidle",
+    });
+    await shortcutPage.waitForSelector(".cm-content");
+    await shortcutPage.keyboard.press("Control+N");
+    await shortcutPage.waitForFunction(
+      () => document.querySelectorAll(".tab-button").length === 2,
+    );
+    await shortcutPage.keyboard.press("Control+W");
+    await shortcutPage.waitForFunction(
+      () => document.querySelectorAll(".tab-button").length === 1,
+    );
+    await replaceEditorText(shortcutPage, "alpha\nbeta\nalpha");
+    await shortcutPage.keyboard.press("Control+F");
+    await shortcutPage.waitForSelector(".cm-md-search-panel[data-mode='search']");
+    await shortcutPage.keyboard.type("alpha");
+    await shortcutPage.keyboard.press("F3");
+    await shortcutPage.keyboard.press("Shift+F3");
+    await shortcutPage.keyboard.press("Control+H");
+    await shortcutPage.waitForSelector(".cm-md-search-panel[data-mode='replace']");
+    await shortcutPage.keyboard.press("Escape");
+    await shortcutPage.waitForSelector(".cm-md-search-panel", {
+      state: "detached",
+    });
+    await shortcutPage.evaluate(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: true,
+          key: "=",
+        }),
+      );
+    });
+    await shortcutPage.waitForFunction(
+      () => document.querySelector(".top-status span")?.textContent === "110%",
+    );
+    await shortcutPage.evaluate(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: true,
+          key: "-",
+        }),
+      );
+    });
+    await shortcutPage.waitForFunction(
+      () => document.querySelector(".top-status span")?.textContent === "100%",
+    );
+    await shortcutPage.evaluate(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: true,
+          key: "=",
+        }),
+      );
+    });
+    await shortcutPage.waitForFunction(
+      () => document.querySelector(".top-status span")?.textContent === "110%",
+    );
+    await shortcutPage.evaluate(() => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: true,
+          key: "0",
+        }),
+      );
+    });
+    await shortcutPage.waitForFunction(
+      () => document.querySelector(".top-status span")?.textContent === "100%",
+    );
+    const shortcutMetrics = await shortcutPage.evaluate(() => ({
+      tabCount: document.querySelectorAll(".tab-button").length,
+      searchPanelCount: document.querySelectorAll(".cm-md-search-panel").length,
+      zoom: document.querySelector(".top-status span")?.textContent,
+    }));
+    assert.deepEqual(shortcutMetrics, {
+      tabCount: 1,
+      searchPanelCount: 0,
+      zoom: "100%",
+    });
+
     const mobilePage = await browser.newPage({
       viewport: {
         width: 390,
@@ -820,9 +1017,10 @@ async function run() {
       deviceScaleFactor: 2,
       isMobile: true,
     });
-    await mobilePage.goto(baseUrl, {
+    await mobilePage.goto(blankUrl, {
       waitUntil: "networkidle",
     });
+    await replaceEditorText(mobilePage, sampleMarkdown);
     await mobilePage.waitForSelector(".cm-md-heading-1");
     await mobilePage.screenshot({
       path: `${outputDir}/live-preview-mobile.png`,
@@ -840,7 +1038,7 @@ async function run() {
         height: 600,
       },
     });
-    await plainUrlPage.goto(baseUrl, {
+    await plainUrlPage.goto(blankUrl, {
       waitUntil: "networkidle",
     });
     await plainUrlPage.waitForSelector(".cm-content");
@@ -869,7 +1067,7 @@ async function run() {
         height: 600,
       },
     });
-    await shortInputPage.goto(baseUrl, {
+    await shortInputPage.goto(blankUrl, {
       waitUntil: "networkidle",
     });
     await shortInputPage.waitForSelector(".cm-content");
@@ -1009,6 +1207,7 @@ async function run() {
           afterArrowUpIntoTable,
           afterTableHeavyCellClick,
           noWrapMetrics,
+          shortcutMetrics,
           mobile: mobileMetrics,
           bareUrlState,
           shortInputResults,

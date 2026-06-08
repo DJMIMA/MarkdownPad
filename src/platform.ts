@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { DocumentTab, RecoverySnapshot } from "./types";
 
 export type MenuAction =
@@ -266,6 +268,48 @@ export async function openExternalUrl(url: string) {
   }
 
   window.open(normalizedUrl, "_blank", "noopener,noreferrer");
+}
+
+export async function openApplicationWindow() {
+  if (isTauriRuntime()) {
+    new WebviewWindow(`markdownpad-${crypto.randomUUID()}`, {
+      url: "/?blank=1",
+      title: "MarkdownPad",
+      width: 1120,
+      height: 760,
+      minWidth: 760,
+      minHeight: 520,
+      center: true,
+      focus: true,
+    });
+    return;
+  }
+
+  const url = new URL(window.location.href);
+  url.searchParams.set("blank", "1");
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
+}
+
+export async function closeCurrentWindow() {
+  if (isTauriRuntime()) {
+    await getCurrentWindow().destroy();
+    return;
+  }
+
+  window.close();
+}
+
+export async function listenToCloseRequested(
+  onCloseRequested: () => void,
+): Promise<UnlistenFn | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  return getCurrentWindow().onCloseRequested((event) => {
+    event.preventDefault();
+    onCloseRequested();
+  });
 }
 
 export async function listenToMenuActions(

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   countWords,
+  createUntitledTab,
   defaultEditorSettings,
   isRecoverySnapshot,
   positionToLineColumn,
@@ -25,6 +26,14 @@ test("positionToLineColumn clamps offsets and reports 1-based coordinates", () =
 test("countWords handles mixed Japanese and latin markdown text", () => {
   assert.equal(countWords("MarkdownPad は軽い editor"), 3);
   assert.equal(countWords(""), 0);
+});
+
+test("createUntitledTab starts with a blank document", () => {
+  const tab = createUntitledTab(1);
+
+  assert.equal(tab.title, "無題-1");
+  assert.equal(tab.content, "");
+  assert.equal(tab.dirty, false);
 });
 
 test("isRecoverySnapshot accepts the persisted recovery shape", () => {

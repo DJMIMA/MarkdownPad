@@ -8,6 +8,14 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -15,21 +23,19 @@
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  min-height: 0;
 }
 
 button {
   font: inherit;
 }
 
-#root {
-  min-height: 100vh;
-}
-
 .app-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+  overflow: hidden;
   background: #eef2f4;
 }
 
@@ -76,7 +82,7 @@ button {
   z-index: 20;
   top: 34px;
   left: 0;
-  min-width: 210px;
+  min-width: 270px;
   padding: 5px;
   border: 1px solid #c7d3d5;
   border-radius: 6px;
@@ -86,8 +92,9 @@ button {
 
 .menu-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 24px;
+  grid-template-columns: minmax(0, 1fr) auto 24px;
   align-items: center;
+  column-gap: 16px;
   width: 100%;
   min-height: 30px;
   padding: 0 8px;
@@ -107,6 +114,13 @@ button {
   border-top: 1px solid #e1e8ea;
   border-radius: 0 0 4px 4px;
   padding-top: 5px;
+}
+
+.menu-shortcut {
+  color: #6d7a7d;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .menu-check {
@@ -198,19 +212,127 @@ button {
 }
 
 .workspace {
+  display: flex;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
   padding: 12px;
 }
 
 .editor-host {
-  height: 100%;
-  min-height: 360px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   border: 1px solid #cbd7d9;
   border-radius: 6px;
   background: #fcfdfd;
   box-shadow: 0 10px 26px rgb(24 43 50 / 8%);
+}
+
+.editor-host .cm-editor {
+  height: 100%;
+  min-height: 0;
+}
+
+.editor-host .cm-scroller {
+  overflow: auto;
+}
+
+.cm-md-table-selection-menu {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid #a7b9bd;
+  border-radius: 6px;
+  background: #fcfdfd;
+  box-shadow: 0 8px 22px rgb(24 43 50 / 18%);
+}
+
+.cm-md-table-selection-menu button {
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #263437;
+}
+
+.cm-md-table-selection-menu button:hover,
+.cm-md-table-selection-menu button:focus {
+  border-color: #bed0d2;
+  background: #e8f2f2;
+  outline: none;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(16 26 29 / 32%);
+}
+
+.unsaved-dialog {
+  width: min(380px, 100%);
+  overflow: hidden;
+  border: 1px solid #9aaeb2;
+  border-radius: 8px;
+  background: #fcfdfd;
+  box-shadow: 0 18px 46px rgb(11 25 30 / 24%);
+  color: #202d30;
+}
+
+.unsaved-dialog h2 {
+  margin: 0;
+  padding: 22px 24px 8px;
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.unsaved-dialog p {
+  margin: 0;
+  padding: 0 24px 22px;
+  color: #263437;
+  font-size: 14px;
+}
+
+.unsaved-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-start;
+  padding: 16px 22px 20px;
+  border-top: 1px solid #d6e0e2;
+  background: #f2f6f7;
+}
+
+.unsaved-dialog-actions button {
+  min-width: 88px;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #e5ecee;
+  color: #202d30;
+}
+
+.unsaved-dialog-actions button:hover,
+.unsaved-dialog-actions button:focus {
+  border-color: #91aeb3;
+  outline: none;
+}
+
+.unsaved-dialog-actions button.primary {
+  border-color: #88a6ab;
+  background: #dce8ea;
+}
+
+.unsaved-dialog-actions button.primary:focus {
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 4px #7aa8b0;
 }
 
 .status-bar {

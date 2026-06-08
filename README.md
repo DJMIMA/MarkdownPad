@@ -195,6 +195,31 @@ cd src-tauri
 cargo check
 ```
 
+## ネイティブアプリのビルド
+
+Windows で直接起動できる release exe を作るには、リポジトリ直下で次を
+実行します。
+
+```powershell
+npm run tauri -- build
+```
+
+このコマンドは Tauri の `beforeBuildCommand` により、先に
+`npm run build` を実行してから Rust/Tauri 側の release build を行います。
+
+生成物は次に作成されます。
+
+```powershell
+src-tauri\target\release\markdownpad.exe
+```
+
+`cargo clean` などで `src-tauri\target` 配下が消えた場合も、同じ
+`npm run tauri -- build` をもう一度実行すれば再生成できます。
+
+現在の Tauri 設定では `bundle.active` が `false` のため、インストーラー
+ではなく直接起動用の exe が生成されます。インストーラーを作る場合は、
+別途 bundle 設定を有効にします。
+
 参考:
 
 - [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
