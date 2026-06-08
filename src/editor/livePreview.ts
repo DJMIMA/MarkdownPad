@@ -1,17 +1,27 @@
 import { syntaxTree } from "@codemirror/language";
 import type { Range } from "@codemirror/state";
-import { EditorState, RangeSetBuilder, StateField } from "@codemirror/state";
+import {
+  EditorSelection,
+  EditorState,
+  RangeSetBuilder,
+  StateField,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
   WidgetType,
   EditorView,
+  keymap,
 } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef } from "@lezer/common";
 
 type SourceRange = {
   from: number;
   to: number;
+};
+
+type TableCellSource = SourceRange & {
+  text: string;
 };
 
 type PreviewDecoration = Range<Decoration>;
@@ -200,6 +210,80 @@ const linkClickHandler = EditorView.domEventHandlers({
   },
 });
 
+function headingEditPosition(state: EditorState, position: number) {
+  const line = state.doc.lineAt(position);
+  const text = state.doc.sliceString(line.from, line.to);
+  const marker = /^(#{1,6}\s*)/.exec(text);
+
+  return line.from + (marker?.[0].length ?? 0);
+}
+
+const headingClickHandler = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    if (event.button !== 0) {
+      return false;
+    }
+
+    const lineElement = event.target instanceof Element
+      ? event.target.closest<HTMLElement>(".cm-md-heading-line")
+      : null;
+
+    if (!lineElement) {
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    view.dispatch({
+      selection: {
+        anchor: headingEditPosition(view.state, view.posAtDOM(lineElement, 0)),
+      },
+      scrollIntoView: true,
+    });
+    view.focus();
+    return true;
+  },
+});
+
+function moveBySourceLine(view: EditorView, direction: "down" | "up") {
+  const selection = view.state.selection.main;
+
+  if (!selection.empty) {
+    return false;
+  }
+
+  const line = view.state.doc.lineAt(selection.head);
+  const targetLineNumber = direction === "down"
+    ? line.number + 1
+    : line.number - 1;
+
+  if (targetLineNumber < 1 || targetLineNumber > view.state.doc.lines) {
+    return false;
+  }
+
+  const targetLine = view.state.doc.line(targetLineNumber);
+  const column = selection.head - line.from;
+  const targetPosition = Math.min(targetLine.from + column, targetLine.to);
+
+  view.dispatch({
+    selection: EditorSelection.cursor(targetPosition),
+    scrollIntoView: true,
+    userEvent: "select",
+  });
+  return true;
+}
+
+const sourceLineNavigation = keymap.of([
+  {
+    key: "ArrowDown",
+    run: (view) => moveBySourceLine(view, "down"),
+  },
+  {
+    key: "ArrowUp",
+    run: (view) => moveBySourceLine(view, "up"),
+  },
+]);
+
 function parseCodeFence(markdown: string) {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const firstLine = lines[0] ?? "";
@@ -212,29 +296,100 @@ function parseCodeFence(markdown: string) {
   };
 }
 
-function splitTableRow(line: string) {
-  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+function trimCellSource(line: string, from: number, to: number) {
+  let cellFrom = from;
+  let cellTo = to;
 
-  return trimmed.split("|").map((cell) => cell.trim());
+  while (cellFrom < cellTo && /\s/.test(line[cellFrom] ?? "")) {
+    cellFrom += 1;
+  }
+
+  while (cellTo > cellFrom && /\s/.test(line[cellTo - 1] ?? "")) {
+    cellTo -= 1;
+  }
+
+  return {
+    from: cellFrom,
+    to: cellTo,
+    text: line.slice(cellFrom, cellTo),
+  };
+}
+
+function splitTableRowWithSource(line: string, lineStart: number) {
+  const segments: SourceRange[] = [];
+  let segmentStart = 0;
+
+  for (let index = 0; index < line.length; index += 1) {
+    if (line[index] === "|") {
+      segments.push({
+        from: segmentStart,
+        to: index,
+      });
+      segmentStart = index + 1;
+    }
+  }
+
+  segments.push({
+    from: segmentStart,
+    to: line.length,
+  });
+
+  if (line.trimStart().startsWith("|")) {
+    segments.shift();
+  }
+
+  if (line.trimEnd().endsWith("|")) {
+    segments.pop();
+  }
+
+  return segments.map((segment) => {
+    const cell = trimCellSource(line, segment.from, segment.to);
+
+    return {
+      from: lineStart + cell.from,
+      to: lineStart + cell.to,
+      text: cell.text,
+    };
+  });
+}
+
+function sourceLines(markdown: string) {
+  const normalized = markdown.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  let offset = 0;
+
+  return lines.map((line) => {
+    const sourceLine = {
+      text: line,
+      from: offset,
+    };
+    offset += line.length + 1;
+    return sourceLine;
+  });
 }
 
 function parseMarkdownTable(markdown: string) {
-  const lines = markdown
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = sourceLines(markdown).filter((line) => line.text.trim());
 
   if (lines.length < 2) {
     return {
       headers: [],
       rows: [],
+      headerCells: [],
+      rowCells: [],
     };
   }
 
+  const headerCells = splitTableRowWithSource(lines[0].text, lines[0].from);
+  const rowCells = lines
+    .slice(2)
+    .map((line) => splitTableRowWithSource(line.text, line.from));
+
   return {
-    headers: splitTableRow(lines[0]),
-    rows: lines.slice(2).map(splitTableRow),
+    headers: headerCells.map((cell) => cell.text),
+    rows: rowCells.map((row) => row.map((cell) => cell.text)),
+    headerCells,
+    rowCells,
   };
 }
 
@@ -361,6 +516,8 @@ class CodeBlockWidget extends WidgetType {
 class TableWidget extends WidgetType {
   private readonly headers: string[];
   private readonly rows: string[][];
+  private readonly headerCells: TableCellSource[];
+  private readonly rowCells: TableCellSource[][];
   private readonly editAt: number;
 
   constructor(markdown: string, editAt: number) {
@@ -368,7 +525,15 @@ class TableWidget extends WidgetType {
     const parsed = parseMarkdownTable(markdown);
     this.headers = parsed.headers;
     this.rows = parsed.rows;
+    this.headerCells = parsed.headerCells;
+    this.rowCells = parsed.rowCells;
     this.editAt = editAt;
+  }
+
+  get estimatedHeight() {
+    const visibleRows = Math.max(1, this.rows.length + 1);
+
+    return visibleRows * 40;
   }
 
   eq(widget: WidgetType) {
@@ -376,8 +541,44 @@ class TableWidget extends WidgetType {
       widget instanceof TableWidget &&
       JSON.stringify(widget.headers) === JSON.stringify(this.headers) &&
       JSON.stringify(widget.rows) === JSON.stringify(this.rows) &&
+      JSON.stringify(widget.headerCells) === JSON.stringify(this.headerCells) &&
+      JSON.stringify(widget.rowCells) === JSON.stringify(this.rowCells) &&
       widget.editAt === this.editAt
     );
+  }
+
+  private sourcePositionForEvent(event: MouseEvent) {
+    const target = event.target instanceof Element
+      ? event.target.closest<HTMLElement>("[data-source-from][data-source-to]")
+      : null;
+
+    if (!target) {
+      return this.editAt;
+    }
+
+    const sourceFrom = Number(target.dataset.sourceFrom);
+    const sourceTo = Number(target.dataset.sourceTo);
+
+    if (!Number.isFinite(sourceFrom) || !Number.isFinite(sourceTo)) {
+      return this.editAt;
+    }
+
+    const rect = target.getBoundingClientRect();
+    const ratio =
+      rect.width > 0
+        ? Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1)
+        : 0;
+
+    return Math.round(sourceFrom + (sourceTo - sourceFrom) * ratio);
+  }
+
+  private applyCellSource(cell: HTMLElement, source?: TableCellSource) {
+    if (!source) {
+      return;
+    }
+
+    cell.dataset.sourceFrom = String(this.editAt + source.from);
+    cell.dataset.sourceTo = String(this.editAt + source.to);
   }
 
   toDOM(view: EditorView) {
@@ -388,11 +589,14 @@ class TableWidget extends WidgetType {
     wrapper.ariaLabel = "表を Markdown ソースで編集";
     wrapper.title = "クリックして Markdown ソースで編集";
 
-    const reveal = makeSourceRevealHandler(view, this.editAt);
-    wrapper.addEventListener("mousedown", reveal);
+    wrapper.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      revealSourceBlock(view, this.sourcePositionForEvent(event));
+    });
     wrapper.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
-        reveal(event);
+        makeSourceRevealHandler(view, this.editAt)(event);
       }
     });
 
@@ -400,8 +604,9 @@ class TableWidget extends WidgetType {
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
 
-    for (const header of this.headers) {
+    for (const [index, header] of this.headers.entries()) {
       const cell = document.createElement("th");
+      this.applyCellSource(cell, this.headerCells[index]);
       cell.append(textNode(header));
       headerRow.append(cell);
     }
@@ -411,11 +616,12 @@ class TableWidget extends WidgetType {
 
     const tbody = document.createElement("tbody");
 
-    for (const row of this.rows) {
+    for (const [rowIndex, row] of this.rows.entries()) {
       const tableRow = document.createElement("tr");
 
-      for (const cellValue of row) {
+      for (const [cellIndex, cellValue] of row.entries()) {
         const cell = document.createElement("td");
+        this.applyCellSource(cell, this.rowCells[rowIndex]?.[cellIndex]);
         cell.append(textNode(cellValue));
         tableRow.append(cell);
       }
@@ -712,4 +918,9 @@ const livePreviewField = StateField.define<DecorationSet>({
   },
 });
 
-export const livePreview = [livePreviewField, linkClickHandler];
+export const livePreview = [
+  livePreviewField,
+  sourceLineNavigation,
+  headingClickHandler,
+  linkClickHandler,
+];

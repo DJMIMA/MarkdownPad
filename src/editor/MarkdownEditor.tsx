@@ -60,7 +60,7 @@ export interface MarkdownEditorHandle {
   selectAll: () => void;
 }
 
-function editorTheme(zoom: number) {
+function editorTheme(zoom: number, wordWrap: boolean) {
   const fontSize = Math.max(13, Math.round(15 * (zoom / 100)));
 
   return EditorView.theme({
@@ -76,12 +76,15 @@ function editorTheme(zoom: number) {
       lineHeight: "1.7",
     },
     ".cm-content": {
-      maxWidth: "920px",
+      maxWidth: wordWrap ? "920px" : "none",
+      width: wordWrap ? "auto" : "max-content",
+      minWidth: "100%",
       minHeight: "100%",
       padding: "34px 44px 48px",
     },
     ".cm-line": {
       padding: "0 4px",
+      minWidth: wordWrap ? "0" : "max-content",
     },
     ".cm-activeLine": {
       backgroundColor: "#eef6f7",
@@ -469,7 +472,7 @@ function MarkdownEditor({
         markdownPadKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
-        themeCompartment.of(editorTheme(zoom)),
+        themeCompartment.of(editorTheme(zoom, wordWrap)),
         updateListener,
       ],
     });
@@ -567,9 +570,9 @@ function MarkdownEditor({
 
   useEffect(() => {
     viewRef.current?.dispatch({
-      effects: themeCompartment.reconfigure(editorTheme(zoom)),
+      effects: themeCompartment.reconfigure(editorTheme(zoom, wordWrap)),
     });
-  }, [themeCompartment, zoom]);
+  }, [themeCompartment, wordWrap, zoom]);
 
   return <div ref={hostRef} className="editor-host" />;
 });

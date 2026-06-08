@@ -8,6 +8,9 @@ dist-ssr/
 # Tauri/Rust build output
 src-tauri/target/
 
+# Test markdowns
+examples_md/
+
 # Logs and local environment
 *.log
 .devserver/
