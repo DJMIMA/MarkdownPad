@@ -174,6 +174,24 @@ function textNode(value: string) {
   return document.createTextNode(value);
 }
 
+function revealSourceBlock(view: EditorView, position: number) {
+  view.dispatch({
+    selection: {
+      anchor: Math.min(position, view.state.doc.length),
+    },
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
+function makeSourceRevealHandler(view: EditorView, position: number) {
+  return (event: MouseEvent | KeyboardEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    revealSourceBlock(view, position);
+  };
+}
+
 class ListMarkerWidget extends WidgetType {
   private readonly marker: string;
 
@@ -220,25 +238,40 @@ class TaskMarkerWidget extends WidgetType {
 class CodeBlockWidget extends WidgetType {
   private readonly language: string;
   private readonly body: string;
+  private readonly editAt: number;
 
-  constructor(markdown: string) {
+  constructor(markdown: string, editAt: number) {
     super();
     const parsed = parseCodeFence(markdown);
     this.language = parsed.language;
     this.body = parsed.body;
+    this.editAt = editAt;
   }
 
   eq(widget: WidgetType) {
     return (
       widget instanceof CodeBlockWidget &&
       widget.language === this.language &&
-      widget.body === this.body
+      widget.body === this.body &&
+      widget.editAt === this.editAt
     );
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-code-block";
+    wrapper.tabIndex = 0;
+    wrapper.role = "button";
+    wrapper.ariaLabel = "コードブロックを Markdown ソースで編集";
+    wrapper.title = "クリックして Markdown ソースで編集";
+
+    const reveal = makeSourceRevealHandler(view, this.editAt);
+    wrapper.addEventListener("mousedown", reveal);
+    wrapper.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        reveal(event);
+      }
+    });
 
     if (this.language) {
       const label = document.createElement("span");
@@ -260,25 +293,40 @@ class CodeBlockWidget extends WidgetType {
 class TableWidget extends WidgetType {
   private readonly headers: string[];
   private readonly rows: string[][];
+  private readonly editAt: number;
 
-  constructor(markdown: string) {
+  constructor(markdown: string, editAt: number) {
     super();
     const parsed = parseMarkdownTable(markdown);
     this.headers = parsed.headers;
     this.rows = parsed.rows;
+    this.editAt = editAt;
   }
 
   eq(widget: WidgetType) {
     return (
       widget instanceof TableWidget &&
       JSON.stringify(widget.headers) === JSON.stringify(this.headers) &&
-      JSON.stringify(widget.rows) === JSON.stringify(this.rows)
+      JSON.stringify(widget.rows) === JSON.stringify(this.rows) &&
+      widget.editAt === this.editAt
     );
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-table-wrapper";
+    wrapper.tabIndex = 0;
+    wrapper.role = "button";
+    wrapper.ariaLabel = "表を Markdown ソースで編集";
+    wrapper.title = "クリックして Markdown ソースで編集";
+
+    const reveal = makeSourceRevealHandler(view, this.editAt);
+    wrapper.addEventListener("mousedown", reveal);
+    wrapper.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        reveal(event);
+      }
+    });
 
     const table = document.createElement("table");
     const thead = document.createElement("thead");
@@ -395,8 +443,15 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
 
       if (isStructuralBlock(node.name) && !isInSourceRange(node, sourceRanges)) {
         const text = state.doc.sliceString(node.from, node.to);
+        const firstLine = state.doc.lineAt(node.from);
+        const editAt =
+          node.name === "FencedCode" && firstLine.to < node.to
+            ? firstLine.to + 1
+            : node.from;
         const widget =
-          node.name === "FencedCode" ? new CodeBlockWidget(text) : new TableWidget(text);
+          node.name === "FencedCode"
+            ? new CodeBlockWidget(text, editAt)
+            : new TableWidget(text, editAt);
 
         addDecoration(
           decorations,

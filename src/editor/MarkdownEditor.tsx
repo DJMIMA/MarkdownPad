@@ -206,6 +206,11 @@ function editorTheme(zoom: number) {
       borderRadius: "8px",
       backgroundColor: "#f1f4f2",
       overflow: "hidden",
+      cursor: "text",
+    },
+    ".cm-md-code-block:focus, .cm-md-table-wrapper:focus": {
+      outline: "2px solid #79aeb4",
+      outlineOffset: "2px",
     },
     ".cm-md-code-language": {
       position: "absolute",
@@ -226,6 +231,7 @@ function editorTheme(zoom: number) {
     ".cm-md-table-wrapper": {
       margin: "0.9em 0 1em",
       overflowX: "auto",
+      cursor: "text",
     },
     ".cm-md-table-wrapper table": {
       width: "100%",

@@ -102,6 +102,55 @@ async function run() {
     assert.equal(afterHeadingClick.h2, "## 見出しの確認");
     assert.equal(afterHeadingClick.active, "## 見出しの確認");
 
+    await page.locator(".cm-content .cm-line").nth(2).click();
+    await page.locator(".cm-md-code-block").click();
+    const afterCodeBlockClick = await page.evaluate(() => ({
+      codeBlockCount: document.querySelectorAll(".cm-md-code-block").length,
+      active: document.querySelector(".cm-activeLine")?.textContent,
+      sourceLines: [...document.querySelectorAll(".cm-content .cm-line")]
+        .map((line) => line.textContent)
+        .filter((text) => text.includes("```") || text.includes("export interface")),
+    }));
+    assert.equal(afterCodeBlockClick.codeBlockCount, 0);
+    assert.equal(afterCodeBlockClick.active, "export interface DocumentTab {");
+    assert.deepEqual(afterCodeBlockClick.sourceLines, [
+      "```ts",
+      "export interface DocumentTab {",
+      "```",
+    ]);
+
+    await page.keyboard.type("// edited ");
+    const afterCodeEdit = await page.evaluate(
+      () => document.querySelector(".cm-activeLine")?.textContent,
+    );
+    assert.equal(afterCodeEdit, "// edited export interface DocumentTab {");
+
+    await page.locator(".cm-content .cm-line").nth(2).click();
+    await page.locator(".cm-md-table-wrapper").click();
+    const afterTableClick = await page.evaluate(() => ({
+      tableCount: document.querySelectorAll(".cm-md-table-wrapper").length,
+      active: document.querySelector(".cm-activeLine")?.textContent,
+      sourceLines: [...document.querySelectorAll(".cm-content .cm-line")]
+        .map((line) => line.textContent)
+        .filter((text) => text.includes("|")),
+    }));
+    assert.equal(afterTableClick.tableCount, 0);
+    assert.equal(afterTableClick.active, "| 機能 | 状態 |");
+    assert.deepEqual(afterTableClick.sourceLines, [
+      "| 機能 | 状態 |",
+      "| --- | --- |",
+      "| 見出し | h1 / h2 / h3 を階層表示 |",
+      "| 表 | カーソル外では表として表示 |",
+    ]);
+
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.type("編集");
+    const afterTableEdit = await page.evaluate(
+      () => document.querySelector(".cm-activeLine")?.textContent,
+    );
+    assert.equal(afterTableEdit, "|編集 機能 | 状態 |");
+    assert.deepEqual(consoleErrors, []);
+
     const mobilePage = await browser.newPage({
       viewport: {
         width: 390,
@@ -129,6 +178,10 @@ async function run() {
           desktop: metrics,
           afterParagraphClick,
           afterHeadingClick,
+          afterCodeBlockClick,
+          afterCodeEdit,
+          afterTableClick,
+          afterTableEdit,
           mobile: mobileMetrics,
           screenshots: [
             `${outputDir}/live-preview-desktop.png`,
