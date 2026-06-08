@@ -23,7 +23,6 @@ import {
 } from "@codemirror/search";
 import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import {
-  drawSelection,
   EditorView,
   highlightActiveLine,
   highlightActiveLineGutter,
@@ -101,6 +100,10 @@ function editorTheme(zoom: number, wordWrap: boolean) {
     },
     ".cm-selectionBackground": {
       backgroundColor: "#b7d7ff !important",
+    },
+    ".cm-md-table-wrapper .cm-md-table-cell-selected": {
+      backgroundColor: "#cfe0ff",
+      boxShadow: "inset 0 0 0 2px #6b94d6",
     },
     ".cm-cursor": {
       borderLeftColor: "#1f6feb",
@@ -243,14 +246,21 @@ function editorTheme(zoom: number, wordWrap: boolean) {
       fontFamily: '"Cascadia Mono", "Consolas", monospace',
       fontSize: "0.92em",
       lineHeight: "1.6",
+      userSelect: "text",
+    },
+    ".cm-md-code-block code": {
+      userSelect: "text",
     },
     ".cm-md-table-wrapper": {
+      width: "fit-content",
+      maxWidth: "100%",
       margin: "0.9em 0 1em",
       overflowX: "auto",
       cursor: "text",
     },
     ".cm-md-table-wrapper table": {
-      width: "100%",
+      width: "max-content",
+      maxWidth: "none",
       borderCollapse: "collapse",
       fontSize: "0.95em",
     },
@@ -263,6 +273,7 @@ function editorTheme(zoom: number, wordWrap: boolean) {
       padding: "7px 10px",
       border: "1px solid #d6ddd9",
       textAlign: "left",
+      whiteSpace: "nowrap",
     },
     ".cm-md-horizontal-rule": {
       display: "flex",
@@ -454,7 +465,6 @@ function MarkdownEditor({
         lineNumbers(),
         highlightActiveLineGutter(),
         history(),
-        drawSelection(),
         indentOnInput(),
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         bracketMatching(),
@@ -466,11 +476,11 @@ function MarkdownEditor({
           top: true,
         }),
         highlightSelectionMatches(),
-        livePreview,
         highlightActiveLine(),
         scrollListener,
         markdownPadKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+        livePreview,
         wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
         themeCompartment.of(editorTheme(zoom, wordWrap)),
         updateListener,

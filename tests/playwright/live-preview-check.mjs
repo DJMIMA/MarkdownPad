@@ -86,11 +86,31 @@ async function collectPreviewMetrics(page) {
       horizontalRuleCount: document.querySelectorAll(".cm-md-horizontal-rule hr").length,
       taskCount: document.querySelectorAll(".cm-md-task-marker").length,
       listMarkerCount: document.querySelectorAll(".cm-md-list-marker").length,
+      tableSizing: (() => {
+        const wrapper = document.querySelector(".cm-md-table-wrapper");
+        const table = wrapper?.querySelector("table");
+        const content = document.querySelector(".cm-content");
+
+        if (!wrapper || !table || !content) {
+          return null;
+        }
+
+        return {
+          wrapperWidth: wrapper.getBoundingClientRect().width,
+          tableWidth: table.getBoundingClientRect().width,
+          contentWidth: content.getBoundingClientRect().width,
+          wrapperScrollWidth: wrapper.scrollWidth,
+        };
+      })(),
       visibleLines: [...document.querySelectorAll(".cm-content .cm-line")]
         .slice(0, 14)
         .map((line) => line.textContent),
     };
   });
+}
+
+async function waitForAnimationFrame(page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(resolve)));
 }
 
 async function run() {
@@ -139,6 +159,15 @@ async function run() {
     assert.equal(metrics.h2.text, "見出しの確認");
     assert.equal(metrics.h3.text, "ライブプレビュー");
     assert.equal(metrics.tableCount, 1);
+    assert.ok(metrics.tableSizing);
+    assert.ok(
+      metrics.tableSizing.tableWidth < metrics.tableSizing.contentWidth * 0.8,
+      JSON.stringify(metrics.tableSizing),
+    );
+    assert.ok(
+      metrics.tableSizing.wrapperWidth < metrics.tableSizing.contentWidth * 0.8,
+      JSON.stringify(metrics.tableSizing),
+    );
     assert.equal(metrics.codeBlockCount, 1);
     assert.equal(metrics.horizontalRuleCount, 1);
     assert.equal(metrics.taskCount, 1);
@@ -156,7 +185,25 @@ async function run() {
     assert.equal(metrics.visibleLines.includes("## 見出しの確認"), false);
     assert.equal(metrics.visibleLines.includes("---"), false);
 
-    await page.locator(".cm-content .cm-line").nth(2).click();
+    const paragraphBox = await page.locator(".cm-content .cm-line").nth(2).boundingBox();
+    assert.ok(paragraphBox);
+    await page.mouse.move(
+      paragraphBox.x + 30,
+      paragraphBox.y + paragraphBox.height * 0.5,
+    );
+    await page.mouse.down();
+    await waitForAnimationFrame(page);
+    const afterParagraphMouseDown = await page.evaluate(() => ({
+      active: document.querySelector(".cm-activeLine")?.textContent,
+      selected: window.getSelection()?.toString(),
+    }));
+    await page.mouse.up();
+    assert.match(
+      afterParagraphMouseDown.active ?? "",
+      /単体の Markdown ファイル/,
+    );
+    assert.equal(afterParagraphMouseDown.selected, "");
+
     const afterParagraphClick = await page.evaluate(() => ({
       h1: document.querySelector(".cm-md-heading-1")?.textContent,
       active: document.querySelector(".cm-activeLine")?.textContent,
@@ -164,13 +211,52 @@ async function run() {
     assert.equal(afterParagraphClick.h1, "MarkdownPad");
     assert.match(afterParagraphClick.active ?? "", /単体の Markdown ファイル/);
 
+    const paragraphSelectionBox = await page
+      .locator(".cm-content .cm-line")
+      .nth(2)
+      .boundingBox();
+    assert.ok(paragraphSelectionBox);
+    await page.mouse.move(
+      paragraphSelectionBox.x + 35,
+      paragraphSelectionBox.y + paragraphSelectionBox.height * 0.5,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      paragraphSelectionBox.x + 170,
+      paragraphSelectionBox.y + paragraphSelectionBox.height * 0.5,
+      {
+        steps: 8,
+      },
+    );
+    const afterParagraphPartialSelection = await page.evaluate(() => ({
+      selected: window.getSelection()?.toString(),
+      active: document.querySelector(".cm-activeLine")?.textContent,
+    }));
+    await page.mouse.up();
+    assert.ok((afterParagraphPartialSelection.selected ?? "").length > 0);
+    assert.doesNotMatch(
+      afterParagraphPartialSelection.selected ?? "",
+      /デスクトップアプリです。$/,
+    );
+    assert.match(
+      afterParagraphPartialSelection.active ?? "",
+      /単体の Markdown ファイル/,
+    );
+    await page.locator(".cm-content .cm-line").nth(2).click();
+
     await page.locator(".cm-md-heading-2").click();
     const afterHeadingClick = await page.evaluate(() => ({
       h2: document.querySelector(".cm-md-heading-2")?.textContent,
       active: document.querySelector(".cm-activeLine")?.textContent,
+      status: [...document.querySelectorAll(".status-bar span")].map(
+        (span) => span.textContent,
+      ),
     }));
     assert.equal(afterHeadingClick.h2, "## 見出しの確認");
     assert.equal(afterHeadingClick.active, "## 見出しの確認");
+    assert.ok(
+      Number(/列 (\d+)/.exec(afterHeadingClick.status[1] ?? "")?.[1] ?? 0) > 4,
+    );
 
     const requestedUrls = [];
     page.context().on("request", (request) => {
@@ -209,6 +295,33 @@ async function run() {
     assert.equal(afterRuleEdit, "*---");
 
     await page.locator(".cm-content .cm-line").nth(2).click();
+    const codeBlockCodeBox = await page.locator(".cm-md-code-block code").boundingBox();
+    assert.ok(codeBlockCodeBox);
+    await page.mouse.move(
+      codeBlockCodeBox.x + 10,
+      codeBlockCodeBox.y + codeBlockCodeBox.height * 0.5,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      codeBlockCodeBox.x + 170,
+      codeBlockCodeBox.y + codeBlockCodeBox.height * 0.5,
+      {
+        steps: 8,
+      },
+    );
+    const afterCodeBlockDragSelection = await page.evaluate(() => ({
+      codeBlockCount: document.querySelectorAll(".cm-md-code-block").length,
+      selected: window.getSelection()?.toString(),
+    }));
+    await page.mouse.up();
+    assert.equal(afterCodeBlockDragSelection.codeBlockCount, 1);
+    assert.match(
+      afterCodeBlockDragSelection.selected ?? "",
+      /export interface|title: string/,
+    );
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+
+    await page.locator(".cm-content .cm-line").nth(2).click();
     await page.locator(".cm-md-code-block").click();
     const afterCodeBlockClick = await page.evaluate(() => ({
       codeBlockCount: document.querySelectorAll(".cm-md-code-block").length,
@@ -230,6 +343,28 @@ async function run() {
       () => document.querySelector(".cm-activeLine")?.textContent,
     );
     assert.equal(afterCodeEdit, "// edited export interface DocumentTab {");
+
+    const codeSourceLineBox = await page
+      .locator(".cm-content .cm-line", {
+        hasText: "// edited export interface DocumentTab {",
+      })
+      .boundingBox();
+    assert.ok(codeSourceLineBox);
+    await page.mouse.click(
+      codeSourceLineBox.x + 20,
+      codeSourceLineBox.y + codeSourceLineBox.height * 0.9,
+    );
+    const afterCodeSourceBottomClick = await page.evaluate(() => ({
+      codeBlockCount: document.querySelectorAll(".cm-md-code-block").length,
+      active: document.querySelector(".cm-activeLine")?.textContent,
+      selected: window.getSelection()?.toString(),
+    }));
+    assert.equal(afterCodeSourceBottomClick.codeBlockCount, 0);
+    assert.equal(
+      afterCodeSourceBottomClick.active,
+      "// edited export interface DocumentTab {",
+    );
+    assert.equal(afterCodeSourceBottomClick.selected, "");
 
     await page.locator(".cm-content .cm-line").nth(2).click();
     await page
@@ -283,7 +418,187 @@ async function run() {
       () => document.querySelector(".cm-activeLine")?.textContent,
     );
     assert.equal(afterTableEdit, "|編集 機能 | 状態 |");
+
+    const tableSourceLastLineBox = await page
+      .locator(".cm-content .cm-line", {
+        hasText: "| 表 | カーソル外では表として表示 |",
+      })
+      .boundingBox();
+    assert.ok(tableSourceLastLineBox);
+    await page.mouse.click(
+      tableSourceLastLineBox.x + 20,
+      tableSourceLastLineBox.y + tableSourceLastLineBox.height * 0.9,
+    );
+    const afterTableSourceBottomClick = await page.evaluate(() => ({
+      tableCount: document.querySelectorAll(".cm-md-table-wrapper").length,
+      active: document.querySelector(".cm-activeLine")?.textContent,
+      selected: window.getSelection()?.toString(),
+    }));
+    assert.equal(afterTableSourceBottomClick.tableCount, 0);
+    assert.equal(
+      afterTableSourceBottomClick.active,
+      "| 表 | カーソル外では表として表示 |",
+    );
+    assert.equal(afterTableSourceBottomClick.selected, "");
     assert.deepEqual(consoleErrors, []);
+
+    const tableSelectionPage = await browser.newPage({
+      viewport: {
+        width: 1000,
+        height: 650,
+      },
+    });
+    await tableSelectionPage.goto(baseUrl, {
+      waitUntil: "networkidle",
+    });
+    await tableSelectionPage.waitForSelector(".cm-content");
+    await tableSelectionPage.click(".cm-content");
+    await tableSelectionPage.keyboard.press("Control+A");
+    await tableSelectionPage.keyboard.press("Backspace");
+    await tableSelectionPage.keyboard.insertText(
+      "Before table\n\n| A | B |\n|---|---|\n| row1 | value1 |\n| row2 | value2 |\n\nAfter table",
+    );
+    const tableSelectionStartBox = await tableSelectionPage
+      .locator(".cm-content .cm-line", {
+        hasText: "Before table",
+      })
+      .boundingBox();
+    const tableSelectionEndBox = await tableSelectionPage
+      .locator(".cm-content .cm-line", {
+        hasText: "After table",
+      })
+      .boundingBox();
+    assert.ok(tableSelectionStartBox);
+    assert.ok(tableSelectionEndBox);
+    await tableSelectionPage.mouse.move(
+      tableSelectionStartBox.x + 10,
+      tableSelectionStartBox.y + tableSelectionStartBox.height * 0.5,
+    );
+    await tableSelectionPage.mouse.down();
+    await tableSelectionPage.mouse.move(
+      tableSelectionEndBox.x + 80,
+      tableSelectionEndBox.y + tableSelectionEndBox.height * 0.5,
+      {
+        steps: 12,
+      },
+    );
+    const afterTablePartialSelection = await tableSelectionPage.evaluate(() => ({
+      tableCount: document.querySelectorAll(".cm-md-table-wrapper").length,
+      sourceTableLineCount: document.querySelectorAll(
+        ".cm-md-structural-source-line",
+      ).length,
+      active: document.querySelector(".cm-activeLine")?.textContent,
+      selected: window.getSelection()?.toString(),
+    }));
+    await tableSelectionPage.mouse.up();
+    assert.equal(afterTablePartialSelection.tableCount, 1);
+    assert.equal(afterTablePartialSelection.sourceTableLineCount, 0);
+    assert.equal(afterTablePartialSelection.active, "After table");
+    assert.match(afterTablePartialSelection.selected ?? "", /row1\s+value1/);
+    assert.match(afterTablePartialSelection.selected ?? "", /row2\s+value2/);
+
+    const tableCellSelectionPage = await browser.newPage({
+      viewport: {
+        width: 1000,
+        height: 650,
+      },
+    });
+    await tableCellSelectionPage.goto(baseUrl, {
+      waitUntil: "networkidle",
+    });
+    await tableCellSelectionPage.waitForSelector(".cm-content");
+    await tableCellSelectionPage.click(".cm-content");
+    await tableCellSelectionPage.keyboard.press("Control+A");
+    await tableCellSelectionPage.keyboard.press("Backspace");
+    await tableCellSelectionPage.keyboard.insertText(
+      "| A | B |\n|---|---|\n| row1 | value1 |\n| row2 | value2 |\n\nAfter table",
+    );
+    await tableCellSelectionPage
+      .locator(".cm-content .cm-line", {
+        hasText: "After table",
+      })
+      .click();
+    const firstCellBox = await tableCellSelectionPage
+      .locator(".cm-md-table-wrapper tbody tr")
+      .first()
+      .locator("td")
+      .first()
+      .boundingBox();
+    const lastCellBox = await tableCellSelectionPage
+      .locator(".cm-md-table-wrapper tbody tr")
+      .nth(1)
+      .locator("td")
+      .nth(1)
+      .boundingBox();
+    assert.ok(firstCellBox);
+    assert.ok(lastCellBox);
+    await tableCellSelectionPage.mouse.move(
+      firstCellBox.x + 8,
+      firstCellBox.y + 8,
+    );
+    await tableCellSelectionPage.mouse.down();
+    await tableCellSelectionPage.mouse.move(
+      lastCellBox.x + 20,
+      lastCellBox.y + 10,
+      {
+        steps: 8,
+      },
+    );
+    const afterTableCellRangeDrag = await tableCellSelectionPage.evaluate(() => ({
+      tableCount: document.querySelectorAll(".cm-md-table-wrapper").length,
+      sourceTableLineCount: document.querySelectorAll(
+        ".cm-md-structural-source-line",
+      ).length,
+      selectedCells: document.querySelectorAll(
+        ".cm-md-table-cell-selected",
+      ).length,
+      selected: window.getSelection()?.toString(),
+    }));
+    await tableCellSelectionPage.mouse.up();
+    assert.equal(afterTableCellRangeDrag.tableCount, 1);
+    assert.equal(afterTableCellRangeDrag.sourceTableLineCount, 0);
+    assert.equal(afterTableCellRangeDrag.selectedCells, 4);
+    assert.equal(afterTableCellRangeDrag.selected, "");
+    const afterTableCellCopy = await tableCellSelectionPage.evaluate(() => {
+      const copied = new Map();
+      const event = new Event("copy", {
+        bubbles: true,
+        cancelable: true,
+      });
+
+      Object.defineProperty(event, "clipboardData", {
+        value: {
+          setData: (type, value) => copied.set(type, value),
+          getData: (type) => copied.get(type) ?? "",
+        },
+      });
+
+      document.activeElement?.dispatchEvent(event);
+
+      return {
+        defaultPrevented: event.defaultPrevented,
+        text: copied.get("text/plain") ?? "",
+      };
+    });
+    assert.equal(afterTableCellCopy.defaultPrevented, true);
+    assert.equal(afterTableCellCopy.text, "row1\tvalue1\nrow2\tvalue2");
+
+    await tableCellSelectionPage.keyboard.press("Backspace");
+    const afterTableCellDelete = await tableCellSelectionPage.evaluate(() => ({
+      selectedCells: document.querySelectorAll(
+        ".cm-md-table-cell-selected",
+      ).length,
+      sourceLines: [...document.querySelectorAll(".cm-content .cm-line")]
+        .map((line) => line.textContent)
+        .filter((text) => text.startsWith("|")),
+    }));
+    assert.equal(afterTableCellDelete.selectedCells, 0);
+    assert.deepEqual(afterTableCellDelete.sourceLines.slice(0, 4), [
+      "| A | B |",
+      "|---|---|",
+      "|  |  |",
+      "|  |  |",
+    ]);
 
     const tableNavigationPage = await browser.newPage({
       viewport: {
@@ -317,7 +632,39 @@ async function run() {
     }));
     assert.equal(afterSecondHeadingClick.active, "## 2. SYK阻害薬");
     assert.equal(afterSecondHeadingClick.selected, "");
-    assert.ok(afterSecondHeadingClick.status.includes("行 10, 列 4"));
+    assert.match(afterSecondHeadingClick.status[1] ?? "", /^行 10, 列 \d+$/);
+
+    const secondHeadingBox = await tableNavigationPage
+      .locator(".cm-md-heading-2", { hasText: "2. SYK阻害薬" })
+      .boundingBox();
+    assert.ok(secondHeadingBox);
+    await tableNavigationPage.mouse.move(
+      secondHeadingBox.x + 30,
+      secondHeadingBox.y + secondHeadingBox.height + 14,
+    );
+    await tableNavigationPage.mouse.down();
+    await waitForAnimationFrame(tableNavigationPage);
+    const afterSecondHeadingBlankMouseDown = await tableNavigationPage.evaluate(() => ({
+      active: document.querySelector(".cm-activeLine")?.textContent,
+      selected: window.getSelection()?.toString(),
+      status: [...document.querySelectorAll(".status-bar span")].map(
+        (span) => span.textContent,
+      ),
+    }));
+    await tableNavigationPage.mouse.up();
+    const afterSecondHeadingBlankClick = await tableNavigationPage.evaluate(() => ({
+      active: document.querySelector(".cm-activeLine")?.textContent,
+      selected: window.getSelection()?.toString(),
+      status: [...document.querySelectorAll(".status-bar span")].map(
+        (span) => span.textContent,
+      ),
+    }));
+    assert.equal(afterSecondHeadingBlankMouseDown.active, "");
+    assert.equal(afterSecondHeadingBlankMouseDown.selected, "");
+    assert.ok(afterSecondHeadingBlankMouseDown.status.includes("行 11, 列 1"));
+    assert.equal(afterSecondHeadingBlankClick.active, "");
+    assert.equal(afterSecondHeadingBlankClick.selected, "");
+    assert.ok(afterSecondHeadingBlankClick.status.includes("行 11, 列 1"));
 
     await tableNavigationPage.evaluate(() =>
       window.scrollTo(0, document.documentElement.scrollHeight),
@@ -339,7 +686,12 @@ async function run() {
     assert.equal(afterNinthHeadingClick.selected, "");
 
     await tableNavigationPage.keyboard.press("Control+Home");
-    await tableNavigationPage.locator(".cm-md-heading-2").first().click();
+    await tableNavigationPage.locator(".cm-md-heading-2").first().click({
+      position: {
+        x: 20,
+        y: 20,
+      },
+    });
     await tableNavigationPage.keyboard.press("ArrowDown");
     await tableNavigationPage.keyboard.press("ArrowDown");
     const afterArrowIntoTable = await tableNavigationPage.evaluate(() => ({
@@ -385,6 +737,7 @@ async function run() {
       });
     const afterTableHeavyCellClick = await tableNavigationPage.evaluate(() => ({
       active: document.querySelector(".cm-activeLine")?.textContent,
+      selected: window.getSelection()?.toString(),
       status: [...document.querySelectorAll(".status-bar span")].map(
         (span) => span.textContent,
       ),
@@ -393,7 +746,39 @@ async function run() {
       afterTableHeavyCellClick.active,
       "| Rilzabrutinib | NCT07086976 | Phase 3 | wAIHA | Sanofi | Recruiting | 90 |",
     );
+    assert.equal(afterTableHeavyCellClick.selected, "");
     assert.match(afterTableHeavyCellClick.status[1] ?? "", /^行 7, 列 5\d$/);
+
+    const heavyTableLastLineBox = await tableNavigationPage
+      .locator(".cm-content .cm-line", {
+        hasText:
+          "| Zanubrutinib | NCT05922839 | Phase 2 | R/R wAIHA | Chen Miao (中国) | Recruiting | 22 |",
+      })
+      .boundingBox();
+    assert.ok(heavyTableLastLineBox);
+    await tableNavigationPage.mouse.click(
+      heavyTableLastLineBox.x + 20,
+      heavyTableLastLineBox.y + heavyTableLastLineBox.height * 0.9,
+    );
+    const afterHeavyTableLastLineBottomClick = await tableNavigationPage.evaluate(() => ({
+      tableCount: document.querySelectorAll(".cm-md-table-wrapper").length,
+      sourceTableLineCount: document.querySelectorAll(
+        ".cm-md-structural-source-line",
+      ).length,
+      active: document.querySelector(".cm-activeLine")?.textContent,
+      selected: window.getSelection()?.toString(),
+      status: [...document.querySelectorAll(".status-bar span")].map(
+        (span) => span.textContent,
+      ),
+    }));
+    assert.equal(afterHeavyTableLastLineBottomClick.tableCount, 8);
+    assert.equal(afterHeavyTableLastLineBottomClick.sourceTableLineCount, 4);
+    assert.equal(
+      afterHeavyTableLastLineBottomClick.active,
+      "| Zanubrutinib | NCT05922839 | Phase 2 | R/R wAIHA | Chen Miao (中国) | Recruiting | 22 |",
+    );
+    assert.equal(afterHeavyTableLastLineBottomClick.selected, "");
+    assert.ok(afterHeavyTableLastLineBottomClick.status.includes("行 8, 列 4"));
 
     const noWrapPage = await browser.newPage({
       viewport: {
@@ -610,12 +995,15 @@ async function run() {
           afterHeadingClick,
           afterRuleClick,
           afterRuleEdit,
+          afterParagraphMouseDown,
           afterCodeBlockClick,
           afterCodeEdit,
           afterTableCellClick,
           afterTableHeaderClick,
           afterTableEdit,
           afterSecondHeadingClick,
+          afterSecondHeadingBlankMouseDown,
+          afterSecondHeadingBlankClick,
           afterNinthHeadingClick,
           afterArrowIntoTable,
           afterArrowUpIntoTable,

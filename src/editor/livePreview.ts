@@ -11,7 +11,7 @@ import {
   type DecorationSet,
   WidgetType,
   EditorView,
-  keymap,
+  ViewPlugin,
 } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef } from "@lezer/common";
 
@@ -22,6 +22,30 @@ type SourceRange = {
 
 type TableCellSource = SourceRange & {
   text: string;
+};
+
+type TableCellPosition = {
+  row: number;
+  column: number;
+};
+
+type SelectedTableCell = TableCellPosition &
+  SourceRange & {
+    text: string;
+  };
+
+type TableCellSelection = {
+  wrapper: HTMLElement;
+  rowFrom: number;
+  rowTo: number;
+  columnFrom: number;
+  columnTo: number;
+  cells: SelectedTableCell[];
+};
+
+type SourceRanges = {
+  all: SourceRange[];
+  structural: SourceRange[];
 };
 
 type PreviewDecoration = Range<Decoration>;
@@ -83,8 +107,11 @@ function rangesIntersect(first: SourceRange, second: SourceRange) {
   return first.from <= second.to && second.from <= first.to;
 }
 
-function sourceRangesForSelection(state: EditorState): SourceRange[] {
-  const ranges: SourceRange[] = [];
+function sourceRangesForSelection(state: EditorState): SourceRanges {
+  const ranges: SourceRanges = {
+    all: [],
+    structural: [],
+  };
   const tree = syntaxTree(state);
 
   for (const selectionRange of state.selection.ranges) {
@@ -93,7 +120,7 @@ function sourceRangesForSelection(state: EditorState): SourceRange[] {
     const startLine = state.doc.lineAt(from);
     const endLine = state.doc.lineAt(to);
 
-    ranges.push({
+    ranges.all.push({
       from: startLine.from,
       to: endLine.to,
     });
@@ -105,12 +132,16 @@ function sourceRangesForSelection(state: EditorState): SourceRange[] {
         }
 
         if (
+          selectionRange.empty &&
           rangeContainsPosition({ from: node.from, to: node.to }, selectionRange.head)
         ) {
-          ranges.push({
+          const structuralRange = {
             from: node.from,
             to: node.to,
-          });
+          };
+
+          ranges.all.push(structuralRange);
+          ranges.structural.push(structuralRange);
         }
       },
     });
@@ -140,6 +171,25 @@ function addDecoration(
   decoration: Decoration,
 ) {
   decorations.push(decoration.range(from, to));
+}
+
+function sourceLineDecoration(from: number, to: number) {
+  return Decoration.line({
+    attributes: {
+      "data-source-from": String(from),
+      "data-source-to": String(to),
+    },
+  });
+}
+
+function structuralSourceLineDecoration(from: number, to: number) {
+  return Decoration.line({
+    class: "cm-md-structural-source-line",
+    attributes: {
+      "data-source-from": String(from),
+      "data-source-to": String(to),
+    },
+  });
 }
 
 function tokenEndWithTrailingSpace(state: EditorState, to: number) {
@@ -183,6 +233,143 @@ function dispatchOpenUrl(url: string) {
   );
 }
 
+const suppressedVisualLineClicks = new WeakMap<EditorView, number>();
+const draggedVisualLineClicks = new WeakMap<EditorView, number>();
+const tableCellSelections = new WeakMap<EditorView, TableCellSelection>();
+
+function suppressNextVisualLineClick(view: EditorView) {
+  const token = Date.now();
+
+  suppressedVisualLineClicks.set(view, token);
+
+  window.setTimeout(() => {
+    if (suppressedVisualLineClicks.get(view) === token) {
+      suppressedVisualLineClicks.delete(view);
+    }
+  }, 400);
+}
+
+function consumeSuppressedVisualLineClick(view: EditorView) {
+  if (!suppressedVisualLineClicks.has(view)) {
+    return false;
+  }
+
+  suppressedVisualLineClicks.delete(view);
+  return true;
+}
+
+function markDraggedVisualLineClick(view: EditorView) {
+  const token = Date.now();
+
+  draggedVisualLineClicks.set(view, token);
+
+  window.setTimeout(() => {
+    if (draggedVisualLineClicks.get(view) === token) {
+      draggedVisualLineClicks.delete(view);
+    }
+  }, 400);
+}
+
+function consumeDraggedVisualLineClick(view: EditorView) {
+  if (!draggedVisualLineClicks.has(view)) {
+    return false;
+  }
+
+  draggedVisualLineClicks.delete(view);
+  return true;
+}
+
+function clearTableCellSelection(view: EditorView) {
+  const selection = tableCellSelections.get(view);
+
+  if (!selection) {
+    return;
+  }
+
+  if (selection.wrapper.isConnected) {
+    selection.wrapper
+      .querySelectorAll(".cm-md-table-cell-selected")
+      .forEach((cell) => cell.classList.remove("cm-md-table-cell-selected"));
+  }
+
+  tableCellSelections.delete(view);
+}
+
+function setTableCellSelection(
+  view: EditorView,
+  selection: TableCellSelection,
+) {
+  const current = tableCellSelections.get(view);
+
+  if (current && current.wrapper !== selection.wrapper) {
+    clearTableCellSelection(view);
+  }
+
+  tableCellSelections.set(view, selection);
+}
+
+function tableCellSelectionText(selection: TableCellSelection) {
+  const byPosition = new Map<string, string>();
+
+  for (const cell of selection.cells) {
+    byPosition.set(`${cell.row}:${cell.column}`, cell.text);
+  }
+
+  const rows: string[] = [];
+
+  for (let row = selection.rowFrom; row <= selection.rowTo; row += 1) {
+    const values: string[] = [];
+
+    for (
+      let column = selection.columnFrom;
+      column <= selection.columnTo;
+      column += 1
+    ) {
+      values.push(byPosition.get(`${row}:${column}`) ?? "");
+    }
+
+    rows.push(values.join("\t"));
+  }
+
+  return rows.join("\n");
+}
+
+function deleteTableCellSelection(view: EditorView) {
+  const selection = tableCellSelections.get(view);
+
+  if (!selection) {
+    return false;
+  }
+
+  const editableCells = selection.cells.filter((cell) =>
+    Number.isFinite(cell.from) &&
+    Number.isFinite(cell.to) &&
+    cell.from <= cell.to
+  );
+
+  if (editableCells.length === 0) {
+    clearTableCellSelection(view);
+    return true;
+  }
+
+  const firstPosition = Math.min(...editableCells.map((cell) => cell.from));
+  clearTableCellSelection(view);
+  view.dispatch({
+    changes: editableCells
+      .sort((first, second) => second.from - first.from)
+      .map((cell) => ({
+        from: cell.from,
+        to: cell.to,
+        insert: "",
+      })),
+    selection: EditorSelection.cursor(firstPosition),
+    scrollIntoView: true,
+    userEvent: "delete.tableCell",
+  });
+  view.focus();
+  return true;
+}
+
 const linkClickHandler = EditorView.domEventHandlers({
   mousedown(event, view) {
     if (event.button !== 0) {
@@ -210,22 +397,191 @@ const linkClickHandler = EditorView.domEventHandlers({
   },
 });
 
-function headingEditPosition(state: EditorState, position: number) {
-  const line = state.doc.lineAt(position);
-  const text = state.doc.sliceString(line.from, line.to);
-  const marker = /^(#{1,6}\s*)/.exec(text);
+function clampPositionToLine(state: EditorState, position: number, lineFrom: number) {
+  const line = state.doc.lineAt(lineFrom);
 
-  return line.from + (marker?.[0].length ?? 0);
+  return Math.min(Math.max(position, line.from), line.to);
 }
 
-const headingClickHandler = EditorView.domEventHandlers({
+function caretPositionFromPoint(event: MouseEvent) {
+  const documentWithCaret = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => {
+      offsetNode: Node;
+      offset: number;
+    } | null;
+    caretRangeFromPoint?: (x: number, y: number) => globalThis.Range | null;
+  };
+
+  const caretPosition = documentWithCaret.caretPositionFromPoint?.(
+    event.clientX,
+    event.clientY,
+  );
+
+  if (caretPosition) {
+    return {
+      node: caretPosition.offsetNode,
+      offset: caretPosition.offset,
+    };
+  }
+
+  const caretRange = documentWithCaret.caretRangeFromPoint?.(
+    event.clientX,
+    event.clientY,
+  );
+
+  return caretRange
+    ? {
+        node: caretRange.startContainer,
+        offset: caretRange.startOffset,
+      }
+    : null;
+}
+
+function clickedLinePosition(
+  view: EditorView,
+  lineElement: HTMLElement,
+  event: MouseEvent,
+) {
+  const sourceFrom = Number(lineElement.dataset.sourceFrom);
+  const lineStart = Number.isFinite(sourceFrom)
+    ? sourceFrom
+    : view.posAtDOM(lineElement, 0);
+  const line = view.state.doc.lineAt(lineStart);
+  const text = view.state.doc.sliceString(line.from, line.to);
+
+  if (!text) {
+    return line.from;
+  }
+
+  const caret = caretPositionFromPoint(event);
+
+  if (caret && lineElement.contains(caret.node)) {
+    try {
+      return clampPositionToLine(
+        view.state,
+        view.posAtDOM(caret.node, caret.offset),
+        line.from,
+      );
+    } catch {
+      // Fall back to a coarse line-relative estimate below.
+    }
+  }
+
+  const rect = lineElement.getBoundingClientRect();
+  const ratio = rect.width > 0
+    ? Math.min(Math.max((event.clientX - rect.left) / rect.width, 0), 1)
+    : 0;
+
+  return line.from + Math.round(text.length * ratio);
+}
+
+function dispatchCursorToClickedLine(
+  view: EditorView,
+  lineElement: HTMLElement,
+  event: MouseEvent,
+) {
+  clearTableCellSelection(view);
+  window.getSelection()?.removeAllRanges();
+  view.dispatch({
+    selection: EditorSelection.cursor(
+      clickedLinePosition(view, lineElement, event),
+    ),
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
+function lineElementAtPoint(event: MouseEvent) {
+  const element = document.elementFromPoint(event.clientX, event.clientY);
+
+  return element instanceof Element
+    ? element.closest<HTMLElement>(".cm-line")
+    : null;
+}
+
+function editorPositionAtPoint(view: EditorView, event: MouseEvent) {
+  const position = view.posAtCoords({
+    x: event.clientX,
+    y: event.clientY,
+  });
+
+  if (typeof position === "number") {
+    return Math.min(Math.max(position, 0), view.state.doc.length);
+  }
+
+  const lineElement = lineElementAtPoint(event);
+
+  return lineElement ? clickedLinePosition(view, lineElement, event) : null;
+}
+
+function installLineSelectionDrag(
+  view: EditorView,
+  anchor: number,
+  startEvent: MouseEvent,
+) {
+  const startX = startEvent.clientX;
+  const startY = startEvent.clientY;
+  let moved = false;
+
+  const updateSelection = (event: MouseEvent) => {
+    const distance =
+      Math.abs(event.clientX - startX) + Math.abs(event.clientY - startY);
+
+    if (!moved && distance < 4) {
+      return;
+    }
+
+    moved = true;
+    markDraggedVisualLineClick(view);
+    event.preventDefault();
+    event.stopPropagation();
+
+    const head = editorPositionAtPoint(view, event);
+
+    if (head === null) {
+      return;
+    }
+
+    view.dispatch({
+      selection: EditorSelection.single(
+        anchor,
+        head,
+      ),
+      scrollIntoView: true,
+      userEvent: "select.pointer",
+    });
+    view.focus();
+  };
+
+  const stop = (event: MouseEvent) => {
+    updateSelection(event);
+    window.removeEventListener("mousemove", updateSelection, true);
+    window.removeEventListener("mouseup", stop, true);
+  };
+
+  window.addEventListener("mousemove", updateSelection, true);
+  window.addEventListener("mouseup", stop, true);
+}
+
+const structuralSourceLineMouseDownHandler = EditorView.domEventHandlers({
   mousedown(event, view) {
     if (event.button !== 0) {
       return false;
     }
 
+    if (event.detail > 1 || event.altKey || event.ctrlKey || event.metaKey) {
+      return false;
+    }
+
+    if (
+      event.target instanceof Element &&
+      event.target.closest("[data-markdown-url]")
+    ) {
+      return false;
+    }
+
     const lineElement = event.target instanceof Element
-      ? event.target.closest<HTMLElement>(".cm-md-heading-line")
+      ? event.target.closest<HTMLElement>(".cm-md-structural-source-line")
       : null;
 
     if (!lineElement) {
@@ -234,13 +590,111 @@ const headingClickHandler = EditorView.domEventHandlers({
 
     event.preventDefault();
     event.stopPropagation();
+    suppressNextVisualLineClick(view);
+    clearTableCellSelection(view);
+    const anchor = clickedLinePosition(view, lineElement, event);
+    window.getSelection()?.removeAllRanges();
     view.dispatch({
-      selection: {
-        anchor: headingEditPosition(view.state, view.posAtDOM(lineElement, 0)),
-      },
+      selection: EditorSelection.cursor(anchor),
       scrollIntoView: true,
+      userEvent: "select.pointer",
     });
     view.focus();
+    installLineSelectionDrag(view, anchor, event);
+    return true;
+  },
+});
+
+const visualLineMouseDownHandler = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    if (event.button !== 0) {
+      return false;
+    }
+
+    if (
+      event.detail > 1 ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey
+    ) {
+      return false;
+    }
+
+    if (
+      event.target instanceof Element &&
+      event.target.closest("[data-markdown-url]")
+    ) {
+      return false;
+    }
+
+    const lineElement = event.target instanceof Element
+      ? event.target.closest<HTMLElement>(".cm-line")
+      : null;
+
+    if (!lineElement || lineElement.classList.contains("cm-md-structural-source-line")) {
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    suppressNextVisualLineClick(view);
+    clearTableCellSelection(view);
+
+    const anchor = clickedLinePosition(view, lineElement, event);
+    window.getSelection()?.removeAllRanges();
+    view.dispatch({
+      selection: EditorSelection.cursor(anchor),
+      scrollIntoView: true,
+      userEvent: "select.pointer",
+    });
+    view.focus();
+    installLineSelectionDrag(view, anchor, event);
+    return true;
+  },
+});
+
+const visualLineClickHandler = EditorView.domEventHandlers({
+  click(event, view) {
+    if (event.button !== 0) {
+      return false;
+    }
+
+    if (event.detail > 1) {
+      return false;
+    }
+
+    if (consumeDraggedVisualLineClick(view)) {
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
+    if (consumeSuppressedVisualLineClick(view)) {
+      event.preventDefault();
+      event.stopPropagation();
+      window.getSelection()?.removeAllRanges();
+      return true;
+    }
+
+    if (
+      event.target instanceof Element &&
+      event.target.closest("[data-markdown-url]")
+    ) {
+      return false;
+    }
+
+    const lineElement = event.target instanceof Element
+      ? event.target.closest<HTMLElement>(".cm-line")
+      : null;
+
+    if (!lineElement) {
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    dispatchCursorToClickedLine(view, lineElement, event);
     return true;
   },
 });
@@ -273,16 +727,77 @@ function moveBySourceLine(view: EditorView, direction: "down" | "up") {
   return true;
 }
 
-const sourceLineNavigation = keymap.of([
-  {
-    key: "ArrowDown",
-    run: (view) => moveBySourceLine(view, "down"),
+const sourceLineNavigation = ViewPlugin.fromClass(
+  class {
+    private readonly view: EditorView;
+
+    private readonly handleCopy = (event: ClipboardEvent) => {
+      const selection = tableCellSelections.get(this.view);
+
+      if (!selection || !event.clipboardData) {
+        return;
+      }
+
+      event.clipboardData.setData("text/plain", tableCellSelectionText(selection));
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    private readonly handleKeyDown = (event: KeyboardEvent) => {
+      if (tableCellSelections.has(this.view)) {
+        if (event.key === "Backspace" || event.key === "Delete") {
+          if (deleteTableCellSelection(this.view)) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+          }
+
+          return;
+        }
+
+        if (event.key === "Escape") {
+          clearTableCellSelection(this.view);
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          return;
+        }
+      }
+
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+
+      const direction = event.key === "ArrowDown"
+        ? "down"
+        : event.key === "ArrowUp"
+          ? "up"
+          : null;
+
+      if (!direction || !moveBySourceLine(this.view, direction)) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+
+    constructor(view: EditorView) {
+      this.view = view;
+      this.view.contentDOM.addEventListener("copy", this.handleCopy, true);
+      this.view.contentDOM.addEventListener("keydown", this.handleKeyDown, true);
+    }
+
+    destroy() {
+      this.view.contentDOM.removeEventListener("copy", this.handleCopy, true);
+      this.view.contentDOM.removeEventListener("keydown", this.handleKeyDown, true);
+    }
   },
-  {
-    key: "ArrowUp",
-    run: (view) => moveBySourceLine(view, "up"),
-  },
-]);
+);
 
 function parseCodeFence(markdown: string) {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
@@ -398,6 +913,8 @@ function textNode(value: string) {
 }
 
 function revealSourceBlock(view: EditorView, position: number) {
+  clearTableCellSelection(view);
+  window.getSelection()?.removeAllRanges();
   view.dispatch({
     selection: {
       anchor: Math.min(position, view.state.doc.length),
@@ -411,6 +928,9 @@ function makeSourceRevealHandler(view: EditorView, position: number) {
   return (event: MouseEvent | KeyboardEvent) => {
     event.preventDefault();
     event.stopPropagation();
+    if (event instanceof MouseEvent) {
+      suppressNextVisualLineClick(view);
+    }
     revealSourceBlock(view, position);
   };
 }
@@ -480,6 +1000,56 @@ class CodeBlockWidget extends WidgetType {
     );
   }
 
+  get estimatedHeight() {
+    const lines = Math.max(1, this.body.split("\n").length);
+
+    return lines * 23 + 64;
+  }
+
+  private handlePointerDown(event: MouseEvent, view: EditorView) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.stopPropagation();
+    clearTableCellSelection(view);
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragged = false;
+
+    const move = (moveEvent: MouseEvent) => {
+      const distance =
+        Math.abs(moveEvent.clientX - startX) +
+        Math.abs(moveEvent.clientY - startY);
+
+      if (distance < 4) {
+        return;
+      }
+
+      dragged = true;
+      markDraggedVisualLineClick(view);
+    };
+
+    const stop = (stopEvent: MouseEvent) => {
+      window.removeEventListener("mousemove", move, true);
+      window.removeEventListener("mouseup", stop, true);
+
+      if (dragged || window.getSelection()?.toString()) {
+        markDraggedVisualLineClick(view);
+        return;
+      }
+
+      stopEvent.preventDefault();
+      stopEvent.stopPropagation();
+      suppressNextVisualLineClick(view);
+      revealSourceBlock(view, this.editAt);
+    };
+
+    window.addEventListener("mousemove", move, true);
+    window.addEventListener("mouseup", stop, true);
+  }
+
   toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-code-block";
@@ -489,7 +1059,9 @@ class CodeBlockWidget extends WidgetType {
     wrapper.title = "クリックして Markdown ソースで編集";
 
     const reveal = makeSourceRevealHandler(view, this.editAt);
-    wrapper.addEventListener("mousedown", reveal);
+    wrapper.addEventListener("mousedown", (event) =>
+      this.handlePointerDown(event, view),
+    );
     wrapper.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         reveal(event);
@@ -533,7 +1105,7 @@ class TableWidget extends WidgetType {
   get estimatedHeight() {
     const visibleRows = Math.max(1, this.rows.length + 1);
 
-    return visibleRows * 40;
+    return visibleRows * 40 + 30;
   }
 
   eq(widget: WidgetType) {
@@ -581,6 +1153,172 @@ class TableWidget extends WidgetType {
     cell.dataset.sourceTo = String(this.editAt + source.to);
   }
 
+  private applyCellPosition(
+    cell: HTMLElement,
+    position: TableCellPosition,
+  ) {
+    cell.dataset.tableRow = String(position.row);
+    cell.dataset.tableColumn = String(position.column);
+  }
+
+  private clearCellSelection(wrapper: HTMLElement) {
+    wrapper
+      .querySelectorAll(".cm-md-table-cell-selected")
+      .forEach((cell) => cell.classList.remove("cm-md-table-cell-selected"));
+  }
+
+  private cellPosition(cell: HTMLElement): TableCellPosition | null {
+    const row = Number(cell.dataset.tableRow);
+    const column = Number(cell.dataset.tableColumn);
+
+    if (!Number.isFinite(row) || !Number.isFinite(column)) {
+      return null;
+    }
+
+    return {
+      row,
+      column,
+    };
+  }
+
+  private markCellSelection(
+    wrapper: HTMLElement,
+    from: TableCellPosition,
+    to: TableCellPosition,
+  ) {
+    const rowFrom = Math.min(from.row, to.row);
+    const rowTo = Math.max(from.row, to.row);
+    const columnFrom = Math.min(from.column, to.column);
+    const columnTo = Math.max(from.column, to.column);
+    const cells: SelectedTableCell[] = [];
+
+    for (const cell of wrapper.querySelectorAll<HTMLElement>(
+      "[data-table-row][data-table-column]",
+    )) {
+      const position = this.cellPosition(cell);
+
+      if (!position) {
+        continue;
+      }
+
+      const selected =
+        position.row >= rowFrom &&
+        position.row <= rowTo &&
+        position.column >= columnFrom &&
+        position.column <= columnTo;
+
+      cell.classList.toggle("cm-md-table-cell-selected", selected);
+
+      if (selected) {
+        cells.push({
+          ...position,
+          from: Number(cell.dataset.sourceFrom),
+          to: Number(cell.dataset.sourceTo),
+          text: cell.textContent ?? "",
+        });
+      }
+    }
+
+    return {
+      wrapper,
+      rowFrom,
+      rowTo,
+      columnFrom,
+      columnTo,
+      cells,
+    };
+  }
+
+  private tableCellForEvent(event: MouseEvent) {
+    return event.target instanceof Element
+      ? event.target.closest<HTMLElement>("[data-table-row][data-table-column]")
+      : null;
+  }
+
+  private handleTablePointerDown(
+    event: MouseEvent,
+    view: EditorView,
+    wrapper: HTMLElement,
+  ) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const startCell = this.tableCellForEvent(event);
+
+    if (!startCell) {
+      event.preventDefault();
+      event.stopPropagation();
+      clearTableCellSelection(view);
+      suppressNextVisualLineClick(view);
+      revealSourceBlock(view, this.sourcePositionForEvent(event));
+      return;
+    }
+
+    const startPosition = this.cellPosition(startCell);
+
+    if (!startPosition) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let selectingCells = false;
+    clearTableCellSelection(view);
+
+    const move = (moveEvent: MouseEvent) => {
+      const distance =
+        Math.abs(moveEvent.clientX - startX) +
+        Math.abs(moveEvent.clientY - startY);
+
+      if (!selectingCells && distance < 4) {
+        return;
+      }
+
+      const targetCell = this.tableCellForEvent(moveEvent);
+      const targetPosition = targetCell ? this.cellPosition(targetCell) : null;
+
+      if (!targetPosition) {
+        return;
+      }
+
+      selectingCells = true;
+      markDraggedVisualLineClick(view);
+      moveEvent.preventDefault();
+      moveEvent.stopPropagation();
+      window.getSelection()?.removeAllRanges();
+      setTableCellSelection(
+        view,
+        this.markCellSelection(wrapper, startPosition, targetPosition),
+      );
+    };
+
+    const stop = (stopEvent: MouseEvent) => {
+      window.removeEventListener("mousemove", move, true);
+      window.removeEventListener("mouseup", stop, true);
+
+      if (selectingCells) {
+        markDraggedVisualLineClick(view);
+        stopEvent.preventDefault();
+        stopEvent.stopPropagation();
+        view.focus();
+        return;
+      }
+
+      clearTableCellSelection(view);
+      suppressNextVisualLineClick(view);
+      revealSourceBlock(view, this.sourcePositionForEvent(event));
+    };
+
+    clearTableCellSelection(view);
+    this.clearCellSelection(wrapper);
+    window.addEventListener("mousemove", move, true);
+    window.addEventListener("mouseup", stop, true);
+  }
+
   toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-table-wrapper";
@@ -589,11 +1327,9 @@ class TableWidget extends WidgetType {
     wrapper.ariaLabel = "表を Markdown ソースで編集";
     wrapper.title = "クリックして Markdown ソースで編集";
 
-    wrapper.addEventListener("mousedown", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      revealSourceBlock(view, this.sourcePositionForEvent(event));
-    });
+    wrapper.addEventListener("mousedown", (event) =>
+      this.handleTablePointerDown(event, view, wrapper),
+    );
     wrapper.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
         makeSourceRevealHandler(view, this.editAt)(event);
@@ -607,6 +1343,10 @@ class TableWidget extends WidgetType {
     for (const [index, header] of this.headers.entries()) {
       const cell = document.createElement("th");
       this.applyCellSource(cell, this.headerCells[index]);
+      this.applyCellPosition(cell, {
+        row: 0,
+        column: index,
+      });
       cell.append(textNode(header));
       headerRow.append(cell);
     }
@@ -622,6 +1362,10 @@ class TableWidget extends WidgetType {
       for (const [cellIndex, cellValue] of row.entries()) {
         const cell = document.createElement("td");
         this.applyCellSource(cell, this.rowCells[rowIndex]?.[cellIndex]);
+        this.applyCellPosition(cell, {
+          row: rowIndex + 1,
+          column: cellIndex,
+        });
         cell.append(textNode(cellValue));
         tableRow.append(cell);
       }
@@ -652,6 +1396,10 @@ class HorizontalRuleWidget extends WidgetType {
       widget.marker === this.marker &&
       widget.editAt === this.editAt
     );
+  }
+
+  get estimatedHeight() {
+    return 50;
   }
 
   toDOM(view: EditorView) {
@@ -729,6 +1477,24 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
   const sourceRanges = sourceRangesForSelection(state);
   const tree = syntaxTree(state);
 
+  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+    const line = state.doc.line(lineNumber);
+    const lineRange = {
+      from: line.from,
+      to: line.to,
+    };
+    const decoration = isRangeInSourceRange(lineRange, sourceRanges.structural)
+      ? structuralSourceLineDecoration(line.from, line.to)
+      : sourceLineDecoration(line.from, line.to);
+
+    addDecoration(
+      decorations,
+      line.from,
+      line.from,
+      decoration,
+    );
+  }
+
   tree.iterate({
     enter(node) {
       const level = headingLevelForNode(node.name);
@@ -756,7 +1522,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         return;
       }
 
-      if (node.name === "Link" && !isInSourceRange(node, sourceRanges)) {
+      if (node.name === "Link" && !isInSourceRange(node, sourceRanges.all)) {
         const url = urlTextForNode(state, node.node);
 
         if (url) {
@@ -769,7 +1535,10 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         }
       }
 
-      if (isStructuralBlock(node.name) && !isInSourceRange(node, sourceRanges)) {
+      if (
+        isStructuralBlock(node.name) &&
+        !isInSourceRange(node, sourceRanges.structural)
+      ) {
         const text = state.doc.sliceString(node.from, node.to);
         const firstLine = state.doc.lineAt(node.from);
         const editAt =
@@ -798,7 +1567,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         return false;
       }
 
-      if (node.name === "Image" && !isInSourceRange(node, sourceRanges)) {
+      if (node.name === "Image" && !isInSourceRange(node, sourceRanges.all)) {
         const text = state.doc.sliceString(node.from, node.to);
         const image = imageParts(text);
 
@@ -815,7 +1584,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         }
       }
 
-      if (isInSourceRange(node, sourceRanges)) {
+      if (isInSourceRange(node, sourceRanges.all)) {
         return;
       }
 
@@ -890,7 +1659,25 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
       return first.from - second.from;
     }
 
-    return first.to - second.to;
+    const firstStartSide = (first.value as Decoration & { startSide?: number })
+      .startSide ?? 0;
+    const secondStartSide = (second.value as Decoration & { startSide?: number })
+      .startSide ?? 0;
+
+    if (firstStartSide !== secondStartSide) {
+      return firstStartSide - secondStartSide;
+    }
+
+    if (first.to !== second.to) {
+      return first.to - second.to;
+    }
+
+    const firstEndSide = (first.value as Decoration & { endSide?: number })
+      .endSide ?? 0;
+    const secondEndSide = (second.value as Decoration & { endSide?: number })
+      .endSide ?? 0;
+
+    return firstEndSide - secondEndSide;
   });
 
   const builder = new RangeSetBuilder<Decoration>();
@@ -921,6 +1708,8 @@ const livePreviewField = StateField.define<DecorationSet>({
 export const livePreview = [
   livePreviewField,
   sourceLineNavigation,
-  headingClickHandler,
+  structuralSourceLineMouseDownHandler,
+  visualLineMouseDownHandler,
+  visualLineClickHandler,
   linkClickHandler,
 ];
