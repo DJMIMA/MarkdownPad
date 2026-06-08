@@ -1,10 +1,49 @@
-use std::{fs, path::PathBuf};
+use std::{
+    env,
+    ffi::OsString,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
-    AppHandle, Emitter, Manager, Runtime, WebviewWindow,
+    AppHandle, Emitter, Manager, Runtime,
 };
 use tauri_plugin_opener::OpenerExt;
+
+#[derive(serde::Serialize)]
+struct OpenedMarkdownFile {
+    title: String,
+    path: String,
+    content: String,
+}
+
+fn file_title_from_path(path: &Path) -> String {
+    path.file_name()
+        .and_then(|file_name| file_name.to_str())
+        .unwrap_or("Markdown")
+        .to_string()
+}
+
+fn is_markdown_file_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "md" | "markdown"))
+        .unwrap_or(false)
+}
+
+fn launch_markdown_path_from_args(args: impl IntoIterator<Item = OsString>) -> Option<PathBuf> {
+    args.into_iter().skip(1).find_map(|arg| {
+        let text = arg.to_string_lossy();
+
+        if text == "--" || text.starts_with('-') {
+            return None;
+        }
+
+        let path = PathBuf::from(arg);
+        is_markdown_file_path(&path).then_some(path)
+    })
+}
 
 fn recovery_snapshot_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let app_data_dir = app
@@ -34,6 +73,27 @@ fn load_recovery_snapshot<R: Runtime>(
 }
 
 #[tauri::command]
+fn load_launch_markdown_file() -> Result<Option<OpenedMarkdownFile>, String> {
+    let Some(path) = launch_markdown_path_from_args(env::args_os()) else {
+        return Ok(None);
+    };
+
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read launch file: {error}"))?;
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+    Ok(Some(OpenedMarkdownFile {
+        title: file_title_from_path(&path),
+        path: canonical_path.to_string_lossy().to_string(),
+        content,
+    }))
+}
+
+#[tauri::command]
 fn save_recovery_snapshot<R: Runtime>(
     app: AppHandle<R>,
     snapshot: serde_json::Value,
@@ -49,6 +109,17 @@ fn save_recovery_snapshot<R: Runtime>(
 
     fs::write(snapshot_path, content)
         .map_err(|error| format!("failed to write recovery snapshot: {error}"))
+}
+
+#[tauri::command]
+fn discard_recovery_snapshot<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let snapshot_path = recovery_snapshot_path(&app)?;
+
+    match fs::remove_file(snapshot_path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("failed to discard recovery snapshot: {error}")),
+    }
 }
 
 #[tauri::command]
@@ -88,28 +159,6 @@ fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), S
     app.opener()
         .open_url(normalized_url, None::<&str>)
         .map_err(|error| format!("failed to open external URL: {error}"))
-}
-
-#[tauri::command]
-fn print_html(window: WebviewWindow, html: String) -> Result<(), String> {
-    let html_json = serde_json::to_string(&html)
-        .map_err(|error| format!("failed to serialize print document: {error}"))?;
-    let script = format!(
-        r#"
-        (() => {{
-          const printWindow = window.open("", "_blank", "noopener,noreferrer");
-          if (!printWindow) return;
-          printWindow.document.write({html_json});
-          printWindow.document.close();
-          printWindow.focus();
-          printWindow.print();
-        }})();
-        "#
-    );
-
-    window
-        .eval(&script)
-        .map_err(|error| format!("failed to start print bridge: {error}"))
 }
 
 fn markdownpad_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
@@ -228,12 +277,52 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             load_recovery_snapshot,
+            load_launch_markdown_file,
             save_recovery_snapshot,
+            discard_recovery_snapshot,
             read_text_file,
             write_text_file,
-            open_external_url,
-            print_html
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MarkdownPad");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn launch_markdown_path_from_args_uses_first_markdown_path() {
+        assert_eq!(
+            launch_markdown_path_from_args(args(&[
+                "markdownpad.exe",
+                "--some-tauri-flag",
+                "C:\\tmp\\note.txt",
+                "C:\\tmp\\note.md",
+                "C:\\tmp\\second.markdown",
+            ])),
+            Some(PathBuf::from("C:\\tmp\\note.md"))
+        );
+    }
+
+    #[test]
+    fn launch_markdown_path_from_args_accepts_markdown_extension_case_insensitively() {
+        assert_eq!(
+            launch_markdown_path_from_args(args(&["markdownpad.exe", "C:\\tmp\\NOTE.MD"])),
+            Some(PathBuf::from("C:\\tmp\\NOTE.MD"))
+        );
+    }
+
+    #[test]
+    fn launch_markdown_path_from_args_ignores_non_markdown_args() {
+        assert_eq!(
+            launch_markdown_path_from_args(args(&["markdownpad.exe", "--", "C:\\tmp\\note.txt",])),
+            None
+        );
+    }
 }

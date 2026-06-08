@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import type { MarkdownPrintDocument } from "./markdown";
 import type { DocumentTab, RecoverySnapshot } from "./types";
 
 export type MenuAction =
@@ -33,6 +34,7 @@ export interface OpenedMarkdownFile {
 }
 
 const recoveryStorageKey = "markdownpad.recovery.v1";
+const printStorageKeyPrefix = "markdownpad.print.";
 
 export function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -106,6 +108,18 @@ async function writeBrowserDownload(title: string, content: string) {
 
 export async function openMarkdownFile(): Promise<OpenedMarkdownFile | null> {
   return pickBrowserFile();
+}
+
+export async function loadLaunchMarkdownFile(): Promise<OpenedMarkdownFile | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  try {
+    return await invoke<OpenedMarkdownFile | null>("load_launch_markdown_file");
+  } catch {
+    return null;
+  }
 }
 
 export async function saveMarkdownFile(
@@ -185,6 +199,19 @@ export async function saveRecoverySnapshot(snapshot: RecoverySnapshot) {
   localStorage.setItem(recoveryStorageKey, JSON.stringify(snapshot));
 }
 
+export async function discardRecoverySnapshot() {
+  if (isTauriRuntime()) {
+    try {
+      await invoke("discard_recovery_snapshot");
+      return;
+    } catch {
+      // Fall through to browser storage cleanup.
+    }
+  }
+
+  localStorage.removeItem(recoveryStorageKey);
+}
+
 export async function loadRecoverySnapshot(): Promise<RecoverySnapshot | null> {
   if (isTauriRuntime()) {
     try {
@@ -207,28 +234,101 @@ export async function loadRecoverySnapshot(): Promise<RecoverySnapshot | null> {
   }
 }
 
-export async function printMarkdownHtml(html: string) {
+function printStorageKey(id: string) {
+  return `${printStorageKeyPrefix}${id}`;
+}
+
+function printDocumentRoute(id: string) {
+  return `/?print=${encodeURIComponent(id)}`;
+}
+
+function isMarkdownPrintDocument(
+  value: unknown,
+): value is MarkdownPrintDocument {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as MarkdownPrintDocument).title === "string" &&
+    typeof (value as MarkdownPrintDocument).bodyHtml === "string" &&
+    typeof (value as MarkdownPrintDocument).styles === "string"
+  );
+}
+
+export function readStoredPrintDocument(
+  id: string,
+): MarkdownPrintDocument | null {
+  const stored = localStorage.getItem(printStorageKey(id));
+
+  if (!stored) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(stored) as unknown;
+    return isMarkdownPrintDocument(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function discardStoredPrintDocument(id: string) {
+  localStorage.removeItem(printStorageKey(id));
+}
+
+function storePrintDocument(document: MarkdownPrintDocument) {
+  const id = crypto.randomUUID();
+  localStorage.setItem(printStorageKey(id), JSON.stringify(document));
+  return id;
+}
+
+function openBrowserPrintWindow(route: string) {
+  const printWindow = window.open(route, "_blank");
+
+  if (!printWindow) {
+    return false;
+  }
+
+  printWindow.focus();
+  return true;
+}
+
+function openTauriPrintWindow(route: string, title: string, printDocumentId: string) {
+  const printWindow = new WebviewWindow(
+    `markdownpad-print-${crypto.randomUUID()}`,
+    {
+      url: route,
+      title: `印刷 - ${title}`,
+      width: 900,
+      height: 720,
+      minWidth: 640,
+      minHeight: 480,
+      center: true,
+      focus: true,
+    },
+  );
+
+  void printWindow.once("tauri://error", () => {
+    discardStoredPrintDocument(printDocumentId);
+  });
+}
+
+export async function printMarkdownDocument(document: MarkdownPrintDocument) {
+  const printDocumentId = storePrintDocument(document);
+  const route = printDocumentRoute(printDocumentId);
+
   if (isTauriRuntime()) {
     try {
-      await invoke("print_html", {
-        html,
-      });
+      openTauriPrintWindow(route, document.title, printDocumentId);
       return;
     } catch {
-      // Browser print fallback is enough for dev-server verification.
+      discardStoredPrintDocument(printDocumentId);
     }
   }
 
-  const printWindow = window.open("", "_blank", "noopener,noreferrer");
-
-  if (!printWindow) {
+  if (!openBrowserPrintWindow(route)) {
+    discardStoredPrintDocument(printDocumentId);
     return;
   }
-
-  printWindow.document.write(html);
-  printWindow.document.close();
-  printWindow.focus();
-  printWindow.print();
 }
 
 function normalizedExternalUrl(url: string) {

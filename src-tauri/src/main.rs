@@ -3,4 +3,3 @@
 fn main() {
     markdownpad_lib::run()
 }
-

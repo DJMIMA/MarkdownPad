@@ -7,10 +7,13 @@ import { markdownPrintDocument } from "./markdown";
 import {
   listenToMenuActions,
   type MenuAction,
+  type OpenedMarkdownFile,
   openMarkdownFile,
-  printMarkdownHtml,
+  loadLaunchMarkdownFile,
+  printMarkdownDocument,
   saveMarkdownFile,
   loadRecoverySnapshot,
+  discardRecoverySnapshot,
   saveRecoverySnapshot,
   isTauriRuntime,
   openExternalUrl,
@@ -25,7 +28,7 @@ import {
   isRecoverySnapshot,
   positionToLineColumn,
 } from "./state";
-import type { DocumentTab, EditorSettings } from "./types";
+import type { DocumentTab, EditorSettings, RecoverySnapshot } from "./types";
 
 type MenuItem = {
   action: MenuAction;
@@ -47,6 +50,11 @@ type UnsavedDialogState = {
   title: string;
   message: string;
   resolve: (decision: UnsavedDialogDecision) => void;
+};
+
+type RecoveryDialogState = {
+  snapshot: RecoverySnapshot;
+  launchTab: DocumentTab | null;
 };
 
 type ShortcutCommand = MenuAction | "find-next" | "find-previous";
@@ -207,12 +215,32 @@ function updateTabById(
   );
 }
 
+function createTabFromOpenedFile(file: OpenedMarkdownFile): DocumentTab {
+  return {
+    id: crypto.randomUUID(),
+    title: file.title,
+    path: file.path,
+    content: file.content,
+    dirty: false,
+    cursor: {
+      anchor: 0,
+      head: 0,
+    },
+    scroll: {
+      x: 0,
+      y: 0,
+    },
+    isUntitled: false,
+  };
+}
+
 function App() {
   const editorRef = useRef<MarkdownEditorHandle | null>(null);
   const handleActionRef = useRef<((action: MenuAction) => Promise<void>) | null>(
     null,
   );
   const unsavedDialogRef = useRef<UnsavedDialogState | null>(null);
+  const recoveryDialogRef = useRef<RecoveryDialogState | null>(null);
   const skipRecovery = useMemo(
     () => new URLSearchParams(window.location.search).has("blank"),
     [],
@@ -226,6 +254,8 @@ function App() {
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [unsavedDialog, setUnsavedDialog] =
     useState<UnsavedDialogState | null>(null);
+  const [recoveryDialog, setRecoveryDialog] =
+    useState<RecoveryDialogState | null>(null);
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const nextUntitledIndex = tabs.filter((tab) => tab.isUntitled).length + 1;
@@ -282,6 +312,49 @@ function App() {
       dialog.resolve(decision);
     },
     [unsavedDialog],
+  );
+
+  const chooseRecoveryDialog = useCallback(
+    async (shouldRestore: boolean) => {
+      const dialog = recoveryDialog;
+
+      if (!dialog) {
+        return;
+      }
+
+      setRecoveryDialog(null);
+
+      if (shouldRestore) {
+        const restoredTabs = dialog.launchTab
+          ? [...dialog.snapshot.tabs, dialog.launchTab]
+          : dialog.snapshot.tabs;
+        const snapshotActiveTabId =
+          dialog.snapshot.activeTabId &&
+          restoredTabs.some((tab) => tab.id === dialog.snapshot.activeTabId)
+            ? dialog.snapshot.activeTabId
+            : restoredTabs[0].id;
+
+        setTabs(restoredTabs);
+        setActiveTabId(dialog.launchTab?.id ?? snapshotActiveTabId);
+        setSettings(dialog.snapshot.settings);
+        setRecoveryReady(true);
+        return;
+      }
+
+      await discardRecoverySnapshot();
+
+      if (dialog.launchTab) {
+        setTabs([dialog.launchTab]);
+        setActiveTabId(dialog.launchTab.id);
+      } else {
+        const replacement = createUntitledTab(1);
+        setTabs([replacement]);
+        setActiveTabId(replacement.id);
+      }
+
+      setRecoveryReady(true);
+    },
+    [recoveryDialog],
   );
 
   const saveTabBeforeClose = useCallback(async (tab: DocumentTab) => {
@@ -360,22 +433,7 @@ function App() {
       return;
     }
 
-    const tab: DocumentTab = {
-      id: crypto.randomUUID(),
-      title: file.title,
-      path: file.path,
-      content: file.content,
-      dirty: false,
-      cursor: {
-        anchor: 0,
-        head: 0,
-      },
-      scroll: {
-        x: 0,
-        y: 0,
-      },
-      isUntitled: false,
-    };
+    const tab = createTabFromOpenedFile(file);
 
     setTabs((currentTabs) => [...currentTabs, tab]);
     setActiveTabId(tab.id);
@@ -413,7 +471,7 @@ function App() {
           await saveActiveTab(true);
           break;
         case "print":
-          await printMarkdownHtml(
+          await printMarkdownDocument(
             markdownPrintDocument(activeTab.content, activeTab.title),
           );
           break;
@@ -423,6 +481,7 @@ function App() {
         case "close-window":
         case "quit":
           if (await dirtyTabsCanClose(tabs)) {
+            await discardRecoverySnapshot();
             await closeCurrentWindow();
           }
           break;
@@ -495,6 +554,10 @@ function App() {
   }, [unsavedDialog]);
 
   useEffect(() => {
+    recoveryDialogRef.current = recoveryDialog;
+  }, [recoveryDialog]);
+
+  useEffect(() => {
     if (skipRecovery) {
       setRecoveryReady(true);
       return;
@@ -502,15 +565,42 @@ function App() {
 
     let mounted = true;
 
-    loadRecoverySnapshot().then((snapshot) => {
+    Promise.all([loadLaunchMarkdownFile(), loadRecoverySnapshot()]).then(([
+      launchFile,
+      snapshot,
+    ]) => {
       if (!mounted) {
         return;
       }
 
-      if (isRecoverySnapshot(snapshot) && snapshot.tabs.length > 0) {
-        setTabs(snapshot.tabs);
-        setActiveTabId(snapshot.activeTabId ?? snapshot.tabs[0].id);
-        setSettings(snapshot.settings);
+      const recoverySnapshot =
+        isRecoverySnapshot(snapshot) && snapshot.tabs.length > 0
+          ? snapshot
+          : null;
+
+      if (launchFile) {
+        const launchTab = createTabFromOpenedFile(launchFile);
+        setTabs([launchTab]);
+        setActiveTabId(launchTab.id);
+
+        if (recoverySnapshot) {
+          setRecoveryDialog({
+            snapshot: recoverySnapshot,
+            launchTab,
+          });
+          return;
+        }
+
+        setRecoveryReady(true);
+        return;
+      }
+
+      if (recoverySnapshot) {
+        setRecoveryDialog({
+          snapshot: recoverySnapshot,
+          launchTab: null,
+        });
+        return;
       }
 
       setRecoveryReady(true);
@@ -583,7 +673,7 @@ function App() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (unsavedDialogRef.current) {
+      if (unsavedDialogRef.current || recoveryDialogRef.current) {
         return;
       }
 
@@ -774,6 +864,39 @@ function App() {
           <span>{activeTab.dirty ? "未保存" : "保存済み"}</span>
           <span>{settings.wordWrap ? "折り返し" : "折り返しなし"}</span>
         </footer>
+      ) : null}
+
+      {recoveryDialog ? (
+        <div className="dialog-backdrop" role="presentation">
+          <section
+            className="unsaved-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="recovery-dialog-title"
+            aria-describedby="recovery-dialog-message"
+          >
+            <h2 id="recovery-dialog-title">MarkdownPad</h2>
+            <p id="recovery-dialog-message">
+              前回アプリが異常終了しています。復元しますか？
+            </p>
+            <div className="unsaved-dialog-actions">
+              <button
+                type="button"
+                className="primary"
+                autoFocus
+                onClick={() => void chooseRecoveryDialog(true)}
+              >
+                はい
+              </button>
+              <button
+                type="button"
+                onClick={() => void chooseRecoveryDialog(false)}
+              >
+                いいえ
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {unsavedDialog ? (

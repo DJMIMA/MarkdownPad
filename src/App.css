@@ -26,6 +26,32 @@ body {
   min-height: 0;
 }
 
+body.print-route,
+body.print-route #root {
+  width: auto;
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+  background: #ffffff;
+}
+
+body.print-route {
+  min-width: 0;
+}
+
+body.print-route .print-missing {
+  margin: 48px auto;
+  max-width: 720px;
+  padding: 0 24px;
+  color: #202d30;
+}
+
+body.print-route .print-missing h1 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.4;
+}
+
 button {
   font: inherit;
 }
