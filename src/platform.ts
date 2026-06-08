@@ -33,6 +33,11 @@ export interface OpenedMarkdownFile {
   content: string;
 }
 
+type SavedMarkdownFile = Pick<
+  DocumentTab,
+  "title" | "path" | "dirty" | "isUntitled"
+>;
+
 const recoveryStorageKey = "markdownpad.recovery.v1";
 const printStorageKeyPrefix = "markdownpad.print.";
 
@@ -107,6 +112,10 @@ async function writeBrowserDownload(title: string, content: string) {
 }
 
 export async function openMarkdownFile(): Promise<OpenedMarkdownFile | null> {
+  if (isTauriRuntime()) {
+    return await invoke<OpenedMarkdownFile | null>("open_markdown_file_dialog");
+  }
+
   return pickBrowserFile();
 }
 
@@ -125,7 +134,7 @@ export async function loadLaunchMarkdownFile(): Promise<OpenedMarkdownFile | nul
 export async function saveMarkdownFile(
   tab: DocumentTab,
   options: { saveAs?: boolean } = {},
-): Promise<Pick<DocumentTab, "title" | "path" | "dirty" | "isUntitled">> {
+): Promise<SavedMarkdownFile> {
   if (isTauriRuntime() && tab.path && !options.saveAs) {
     await invoke("write_text_file", {
       path: tab.path,
@@ -140,6 +149,24 @@ export async function saveMarkdownFile(
     };
   }
 
+  const suggestedName = tab.path ? fileTitleFromPath(tab.path) : `${tab.title}.md`;
+
+  if (isTauriRuntime() && options.saveAs) {
+    const saved = await invoke<SavedMarkdownFile | null>(
+      "save_markdown_file_as_dialog",
+      {
+        suggestedName,
+        content: tab.content,
+      },
+    );
+
+    if (!saved) {
+      throw new Error("save canceled");
+    }
+
+    return saved;
+  }
+
   const picker = (window as Window & {
     showSaveFilePicker?: (options?: unknown) => Promise<{
       name?: string;
@@ -152,7 +179,7 @@ export async function saveMarkdownFile(
 
   if (picker) {
     const handle = await picker({
-      suggestedName: tab.path ? fileTitleFromPath(tab.path) : `${tab.title}.md`,
+      suggestedName,
       types: [
         {
           description: "Markdown",

@@ -442,7 +442,7 @@ function App() {
   const saveActiveTab = useCallback(
     async (saveAs = false) => {
       const saved = await saveMarkdownFile(activeTab, {
-        saveAs,
+        saveAs: saveAs || activeTab.path === null,
       });
 
       updateActiveTab(saved);

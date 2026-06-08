@@ -18,6 +18,15 @@ struct OpenedMarkdownFile {
     content: String,
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedMarkdownFile {
+    title: String,
+    path: String,
+    dirty: bool,
+    is_untitled: bool,
+}
+
 fn file_title_from_path(path: &Path) -> String {
     path.file_name()
         .and_then(|file_name| file_name.to_str())
@@ -43,6 +52,109 @@ fn launch_markdown_path_from_args(args: impl IntoIterator<Item = OsString>) -> O
         let path = PathBuf::from(arg);
         is_markdown_file_path(&path).then_some(path)
     })
+}
+
+#[cfg(target_os = "windows")]
+fn wide_null_terminated(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(target_os = "windows")]
+fn markdown_filter_wide() -> Vec<u16> {
+    "Markdown files (*.md;*.markdown)\0*.md;*.markdown\0Text files (*.txt)\0*.txt\0All files (*.*)\0*.*\0\0"
+        .encode_utf16()
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn selected_path_from_buffer(buffer: &[u16]) -> Option<PathBuf> {
+    let len = buffer.iter().position(|value| *value == 0)?;
+
+    if len == 0 {
+        return None;
+    }
+
+    Some(PathBuf::from(String::from_utf16_lossy(&buffer[..len])))
+}
+
+#[cfg(target_os = "windows")]
+fn common_dialog_error_message(action: &str) -> String {
+    let error = unsafe { windows_sys::Win32::UI::Controls::Dialogs::CommDlgExtendedError() };
+
+    if error == 0 {
+        format!("{action} canceled")
+    } else {
+        format!("{action} failed with common dialog error {error}")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn choose_markdown_file_path(
+    action: &str,
+    suggested_name: Option<&str>,
+    save: bool,
+) -> Result<Option<PathBuf>, String> {
+    use windows_sys::Win32::UI::Controls::Dialogs::{
+        GetOpenFileNameW, GetSaveFileNameW, OFN_ENABLESIZING, OFN_EXPLORER, OFN_FILEMUSTEXIST,
+        OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+
+    let filter = markdown_filter_wide();
+    let default_extension = wide_null_terminated("md");
+    let title = wide_null_terminated(if save {
+        "名前を付けて保存"
+    } else {
+        "Markdown ファイルを開く"
+    });
+    let mut file_buffer = vec![0u16; 32768];
+
+    if let Some(name) = suggested_name {
+        for (index, value) in name.encode_utf16().take(file_buffer.len() - 1).enumerate() {
+            file_buffer[index] = value;
+        }
+    }
+
+    let mut flags = OFN_EXPLORER | OFN_ENABLESIZING | OFN_NOCHANGEDIR | OFN_PATHMUSTEXIST;
+
+    if save {
+        flags |= OFN_OVERWRITEPROMPT;
+    } else {
+        flags |= OFN_FILEMUSTEXIST;
+    }
+
+    let mut dialog = OPENFILENAMEW {
+        lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: unsafe { GetForegroundWindow() },
+        lpstrFilter: filter.as_ptr(),
+        nFilterIndex: 1,
+        lpstrFile: file_buffer.as_mut_ptr(),
+        nMaxFile: file_buffer.len() as u32,
+        lpstrTitle: title.as_ptr(),
+        Flags: flags,
+        lpstrDefExt: default_extension.as_ptr(),
+        ..Default::default()
+    };
+
+    let accepted = unsafe {
+        if save {
+            GetSaveFileNameW(&mut dialog)
+        } else {
+            GetOpenFileNameW(&mut dialog)
+        }
+    };
+
+    if accepted == 0 {
+        let error = unsafe { windows_sys::Win32::UI::Controls::Dialogs::CommDlgExtendedError() };
+
+        if error == 0 {
+            return Ok(None);
+        }
+
+        return Err(common_dialog_error_message(action));
+    }
+
+    Ok(selected_path_from_buffer(&file_buffer))
 }
 
 fn recovery_snapshot_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
@@ -91,6 +203,61 @@ fn load_launch_markdown_file() -> Result<Option<OpenedMarkdownFile>, String> {
         path: canonical_path.to_string_lossy().to_string(),
         content,
     }))
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn open_markdown_file_dialog() -> Result<Option<OpenedMarkdownFile>, String> {
+    let Some(path) = choose_markdown_file_path("open Markdown file", None, false)? else {
+        return Ok(None);
+    };
+    let content =
+        fs::read_to_string(&path).map_err(|error| format!("failed to read file: {error}"))?;
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+    Ok(Some(OpenedMarkdownFile {
+        title: file_title_from_path(&path),
+        path: canonical_path.to_string_lossy().to_string(),
+        content,
+    }))
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn open_markdown_file_dialog() -> Result<Option<OpenedMarkdownFile>, String> {
+    Err("native file dialogs are only implemented on Windows".to_string())
+}
+
+#[cfg(target_os = "windows")]
+#[tauri::command]
+fn save_markdown_file_as_dialog(
+    suggested_name: String,
+    content: String,
+) -> Result<Option<SavedMarkdownFile>, String> {
+    let Some(path) =
+        choose_markdown_file_path("save Markdown file", Some(suggested_name.as_str()), true)?
+    else {
+        return Ok(None);
+    };
+
+    fs::write(&path, content).map_err(|error| format!("failed to write file: {error}"))?;
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+
+    Ok(Some(SavedMarkdownFile {
+        title: file_title_from_path(&path),
+        path: canonical_path.to_string_lossy().to_string(),
+        dirty: false,
+        is_untitled: false,
+    }))
+}
+
+#[cfg(not(target_os = "windows"))]
+#[tauri::command]
+fn save_markdown_file_as_dialog(
+    _suggested_name: String,
+    _content: String,
+) -> Result<Option<SavedMarkdownFile>, String> {
+    Err("native file dialogs are only implemented on Windows".to_string())
 }
 
 #[tauri::command]
@@ -278,6 +445,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_recovery_snapshot,
             load_launch_markdown_file,
+            open_markdown_file_dialog,
+            save_markdown_file_as_dialog,
             save_recovery_snapshot,
             discard_recovery_snapshot,
             read_text_file,
@@ -323,6 +492,19 @@ mod tests {
         assert_eq!(
             launch_markdown_path_from_args(args(&["markdownpad.exe", "--", "C:\\tmp\\note.txt",])),
             None
+        );
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn selected_path_from_buffer_reads_until_first_null() {
+        let mut buffer: Vec<u16> = "C:\\tmp\\note.md".encode_utf16().collect();
+        buffer.push(0);
+        buffer.extend("ignored".encode_utf16());
+
+        assert_eq!(
+            selected_path_from_buffer(&buffer),
+            Some(PathBuf::from("C:\\tmp\\note.md"))
         );
     }
 }
