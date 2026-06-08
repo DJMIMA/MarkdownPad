@@ -4,6 +4,7 @@ use tauri::{
     menu::{Menu, MenuBuilder, SubmenuBuilder},
     AppHandle, Emitter, Manager, Runtime, WebviewWindow,
 };
+use tauri_plugin_opener::OpenerExt;
 
 fn recovery_snapshot_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let app_data_dir = app
@@ -58,6 +59,35 @@ fn read_text_file(path: String) -> Result<String, String> {
 #[tauri::command]
 fn write_text_file(path: String, content: String) -> Result<(), String> {
     fs::write(path, content).map_err(|error| format!("failed to write file: {error}"))
+}
+
+fn normalized_external_url(url: &str) -> Option<String> {
+    let trimmed = url.trim();
+    let lower = trimmed.to_ascii_lowercase();
+
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("tel:")
+    {
+        return Some(trimmed.to_string());
+    }
+
+    if lower.starts_with("www.") {
+        return Some(format!("https://{trimmed}"));
+    }
+
+    None
+}
+
+#[tauri::command]
+fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), String> {
+    let normalized_url =
+        normalized_external_url(&url).ok_or_else(|| "unsupported external URL".to_string())?;
+
+    app.opener()
+        .open_url(normalized_url, None::<&str>)
+        .map_err(|error| format!("failed to open external URL: {error}"))
 }
 
 #[tauri::command]
@@ -139,6 +169,7 @@ pub fn run() {
             save_recovery_snapshot,
             read_text_file,
             write_text_file,
+            open_external_url,
             print_html
         ])
         .run(tauri::generate_context!())

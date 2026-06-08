@@ -7,7 +7,7 @@ import {
   WidgetType,
   EditorView,
 } from "@codemirror/view";
-import type { SyntaxNodeRef } from "@lezer/common";
+import type { SyntaxNode, SyntaxNodeRef } from "@lezer/common";
 
 type SourceRange = {
   from: number;
@@ -28,7 +28,7 @@ export function headingLevelForNode(name: string): number | null {
 }
 
 export function isStructuralBlock(name: string): boolean {
-  return name === "FencedCode" || name === "Table";
+  return name === "FencedCode" || name === "Table" || name === "HorizontalRule";
 }
 
 export function shouldHideMarkdownNode(name: string): boolean {
@@ -38,7 +38,6 @@ export function shouldHideMarkdownNode(name: string): boolean {
     name === "EmphasisMark" ||
     name === "StrikethroughMark" ||
     name === "LinkMark" ||
-    name === "URL" ||
     name === "CodeMark" ||
     name === "CodeInfo"
   );
@@ -111,11 +110,16 @@ function sourceRangesForSelection(state: EditorState): SourceRange[] {
 }
 
 function isInSourceRange(node: SyntaxNodeRef, ranges: SourceRange[]) {
-  const nodeRange = {
-    from: node.from,
-    to: node.to,
-  };
+  return isRangeInSourceRange(
+    {
+      from: node.from,
+      to: node.to,
+    },
+    ranges,
+  );
+}
 
+function isRangeInSourceRange(nodeRange: SourceRange, ranges: SourceRange[]) {
   return ranges.some((range) => rangesIntersect(nodeRange, range));
 }
 
@@ -131,6 +135,70 @@ function addDecoration(
 function tokenEndWithTrailingSpace(state: EditorState, to: number) {
   return state.doc.sliceString(to, to + 1) === " " ? to + 1 : to;
 }
+
+function lineHasContentAfterToken(state: EditorState, tokenTo: number) {
+  const line = state.doc.lineAt(tokenTo);
+
+  return state.doc.sliceString(tokenTo, line.to).trim().length > 0;
+}
+
+function urlTextForNode(state: EditorState, node: SyntaxNode) {
+  if (node.name === "URL") {
+    return state.doc.sliceString(node.from, node.to);
+  }
+
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.name === "URL") {
+      return state.doc.sliceString(child.from, child.to);
+    }
+  }
+
+  return null;
+}
+
+function clickableLinkDecoration(url: string) {
+  return Decoration.mark({
+    class: "cm-md-clickable-link",
+    attributes: {
+      "data-markdown-url": url,
+    },
+  });
+}
+
+function dispatchOpenUrl(url: string) {
+  window.dispatchEvent(
+    new CustomEvent<string>("markdownpad-open-url", {
+      detail: url,
+    }),
+  );
+}
+
+const linkClickHandler = EditorView.domEventHandlers({
+  mousedown(event, view) {
+    if (event.button !== 0) {
+      return false;
+    }
+
+    const target = event.target instanceof Element
+      ? event.target.closest<HTMLElement>("[data-markdown-url]")
+      : null;
+
+    if (!target) {
+      return false;
+    }
+
+    const url = target.dataset.markdownUrl;
+
+    if (!url) {
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    dispatchOpenUrl(url);
+    return true;
+  },
+});
 
 function parseCodeFence(markdown: string) {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
@@ -362,6 +430,47 @@ class TableWidget extends WidgetType {
   }
 }
 
+class HorizontalRuleWidget extends WidgetType {
+  private readonly marker: string;
+  private readonly editAt: number;
+
+  constructor(marker: string, editAt: number) {
+    super();
+    this.marker = marker;
+    this.editAt = editAt;
+  }
+
+  eq(widget: WidgetType) {
+    return (
+      widget instanceof HorizontalRuleWidget &&
+      widget.marker === this.marker &&
+      widget.editAt === this.editAt
+    );
+  }
+
+  toDOM(view: EditorView) {
+    const wrapper = document.createElement("div");
+    wrapper.className = "cm-md-horizontal-rule";
+    wrapper.tabIndex = 0;
+    wrapper.role = "button";
+    wrapper.ariaLabel = "罫線を Markdown ソースで編集";
+    wrapper.title = "クリックして Markdown ソースで編集";
+
+    const reveal = makeSourceRevealHandler(view, this.editAt);
+    wrapper.addEventListener("mousedown", reveal);
+    wrapper.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        reveal(event);
+      }
+    });
+
+    const rule = document.createElement("hr");
+    wrapper.append(rule);
+
+    return wrapper;
+  }
+}
+
 class ImageWidget extends WidgetType {
   private readonly alt: string;
   private readonly url: string;
@@ -441,6 +550,19 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         return;
       }
 
+      if (node.name === "Link" && !isInSourceRange(node, sourceRanges)) {
+        const url = urlTextForNode(state, node.node);
+
+        if (url) {
+          addDecoration(
+            decorations,
+            node.from,
+            node.to,
+            clickableLinkDecoration(url),
+          );
+        }
+      }
+
       if (isStructuralBlock(node.name) && !isInSourceRange(node, sourceRanges)) {
         const text = state.doc.sliceString(node.from, node.to);
         const firstLine = state.doc.lineAt(node.from);
@@ -448,10 +570,15 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
           node.name === "FencedCode" && firstLine.to < node.to
             ? firstLine.to + 1
             : node.from;
-        const widget =
-          node.name === "FencedCode"
-            ? new CodeBlockWidget(text, editAt)
-            : new TableWidget(text, editAt);
+        let widget: WidgetType;
+
+        if (node.name === "FencedCode") {
+          widget = new CodeBlockWidget(text, editAt);
+        } else if (node.name === "Table") {
+          widget = new TableWidget(text, editAt);
+        } else {
+          widget = new HorizontalRuleWidget(text, editAt);
+        }
 
         addDecoration(
           decorations,
@@ -487,6 +614,10 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
       }
 
       if (node.name === "ListMark") {
+        if (!lineHasContentAfterToken(state, node.to)) {
+          return;
+        }
+
         const marker = state.doc.sliceString(node.from, node.to);
         addDecoration(
           decorations,
@@ -500,6 +631,10 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
       }
 
       if (node.name === "TaskMarker") {
+        if (!lineHasContentAfterToken(state, node.to)) {
+          return;
+        }
+
         const marker = state.doc.sliceString(node.from, node.to);
         addDecoration(
           decorations,
@@ -512,7 +647,29 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         return;
       }
 
+      if (node.name === "URL") {
+        const parentName = node.node.parent?.name;
+
+        if (parentName === "Link" || parentName === "Image") {
+          addDecoration(decorations, node.from, node.to, hiddenMarkDecoration);
+        }
+
+        return;
+      }
+
+      if (node.name === "Escape") {
+        addDecoration(decorations, node.from, node.from + 1, hiddenMarkDecoration);
+        return;
+      }
+
       if (shouldHideMarkdownNode(node.name)) {
+        if (
+          (node.name === "HeaderMark" || node.name === "QuoteMark") &&
+          !lineHasContentAfterToken(state, node.to)
+        ) {
+          return;
+        }
+
         const to =
           node.name === "HeaderMark" || node.name === "QuoteMark"
             ? tokenEndWithTrailingSpace(state, node.to)
@@ -555,4 +712,4 @@ const livePreviewField = StateField.define<DecorationSet>({
   },
 });
 
-export const livePreview = livePreviewField;
+export const livePreview = [livePreviewField, linkClickHandler];

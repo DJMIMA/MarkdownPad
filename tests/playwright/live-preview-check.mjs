@@ -26,6 +26,7 @@ async function collectPreviewMetrics(page) {
       h3: pick(".cm-md-heading-3"),
       tableCount: document.querySelectorAll(".cm-md-table-wrapper table").length,
       codeBlockCount: document.querySelectorAll(".cm-md-code-block pre").length,
+      horizontalRuleCount: document.querySelectorAll(".cm-md-horizontal-rule hr").length,
       taskCount: document.querySelectorAll(".cm-md-task-marker").length,
       listMarkerCount: document.querySelectorAll(".cm-md-list-marker").length,
       visibleLines: [...document.querySelectorAll(".cm-content .cm-line")]
@@ -82,9 +83,21 @@ async function run() {
     assert.equal(metrics.h3.text, "ライブプレビュー");
     assert.equal(metrics.tableCount, 1);
     assert.equal(metrics.codeBlockCount, 1);
+    assert.equal(metrics.horizontalRuleCount, 1);
     assert.equal(metrics.taskCount, 1);
     assert.equal(metrics.listMarkerCount, 3);
+    assert.ok(
+      metrics.visibleLines.includes(
+        "• 太字 と 強調 は記号を隠して読みやすく表示します",
+      ),
+    );
+    assert.ok(
+      metrics.visibleLines.includes(
+        "エスケープした *記号* と ; ^ ＾ は文字として残ります。",
+      ),
+    );
     assert.equal(metrics.visibleLines.includes("## 見出しの確認"), false);
+    assert.equal(metrics.visibleLines.includes("---"), false);
 
     await page.locator(".cm-content .cm-line").nth(2).click();
     const afterParagraphClick = await page.evaluate(() => ({
@@ -101,6 +114,42 @@ async function run() {
     }));
     assert.equal(afterHeadingClick.h2, "## 見出しの確認");
     assert.equal(afterHeadingClick.active, "## 見出しの確認");
+
+    const requestedUrls = [];
+    page.context().on("request", (request) => {
+      requestedUrls.push(request.url());
+    });
+    const popupPromise = page.waitForEvent("popup");
+    const explicitLink = page.locator('[data-markdown-url="https://example.com"]').first();
+    const normalColor = await explicitLink.evaluate(
+      (element) => getComputedStyle(element).color,
+    );
+    await explicitLink.hover();
+    const hoverColor = await explicitLink.evaluate(
+      (element) => getComputedStyle(element).color,
+    );
+    assert.notEqual(normalColor, hoverColor);
+    await explicitLink.click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState("domcontentloaded").catch(() => {});
+    assert.ok(requestedUrls.includes("https://example.com/"));
+    await popup.close();
+    assert.deepEqual(consoleErrors, []);
+
+    await page.locator(".cm-content .cm-line").nth(2).click();
+    await page.locator(".cm-md-horizontal-rule").click();
+    const afterRuleClick = await page.evaluate(() => ({
+      horizontalRuleCount: document.querySelectorAll(".cm-md-horizontal-rule").length,
+      active: document.querySelector(".cm-activeLine")?.textContent,
+    }));
+    assert.equal(afterRuleClick.horizontalRuleCount, 0);
+    assert.equal(afterRuleClick.active, "---");
+
+    await page.keyboard.type("*");
+    const afterRuleEdit = await page.evaluate(
+      () => document.querySelector(".cm-activeLine")?.textContent,
+    );
+    assert.equal(afterRuleEdit, "*---");
 
     await page.locator(".cm-content .cm-line").nth(2).click();
     await page.locator(".cm-md-code-block").click();
@@ -171,6 +220,160 @@ async function run() {
     const mobileMetrics = await collectPreviewMetrics(mobilePage);
     assert.equal(mobileMetrics.h2?.text, "見出しの確認");
     assert.equal(mobileMetrics.tableCount, 1);
+    assert.equal(mobileMetrics.horizontalRuleCount, 1);
+
+    const plainUrlPage = await browser.newPage({
+      viewport: {
+        width: 900,
+        height: 600,
+      },
+    });
+    await plainUrlPage.goto(baseUrl, {
+      waitUntil: "networkidle",
+    });
+    await plainUrlPage.waitForSelector(".cm-content");
+    await plainUrlPage.click(".cm-content");
+    await plainUrlPage.keyboard.press("Control+A");
+    await plainUrlPage.keyboard.press("Backspace");
+    await plainUrlPage.keyboard.type(
+      "bare https://example.com?a=1;b=2#x^y stays plain",
+    );
+    await plainUrlPage.waitForTimeout(100);
+    const bareUrlState = await plainUrlPage.evaluate(() => ({
+      text: document.querySelector(".cm-content")?.textContent,
+      explicitLinks: document.querySelectorAll("[data-markdown-url]").length,
+      clickableLinks: document.querySelectorAll(".cm-md-clickable-link").length,
+    }));
+    assert.match(
+      bareUrlState.text ?? "",
+      /bare https:\/\/example\.com\?a=1;b=2#x\^y stays plain/,
+    );
+    assert.equal(bareUrlState.explicitLinks, 0);
+    assert.equal(bareUrlState.clickableLinks, 0);
+
+    const shortInputPage = await browser.newPage({
+      viewport: {
+        width: 900,
+        height: 600,
+      },
+    });
+    await shortInputPage.goto(baseUrl, {
+      waitUntil: "networkidle",
+    });
+    await shortInputPage.waitForSelector(".cm-content");
+
+    const shortInputResults = [];
+
+    for (const text of ["a", "aa", "aaa", ";", "^", "＾", "#", ">", "-", "あ"]) {
+      await shortInputPage.click(".cm-content");
+      await shortInputPage.keyboard.press("Control+A");
+      await shortInputPage.keyboard.press("Backspace");
+      await shortInputPage.keyboard.type(text);
+      await shortInputPage.keyboard.press("Enter");
+      await shortInputPage.waitForTimeout(100);
+      shortInputResults.push({
+        text,
+        lines: await shortInputPage.evaluate(() =>
+          [...document.querySelectorAll(".cm-content .cm-line")].map(
+            (line) => line.textContent,
+          ),
+        ),
+      });
+    }
+
+    for (const result of shortInputResults) {
+      assert.equal(result.lines[0], result.text);
+      assert.equal(result.lines[1], "");
+    }
+
+    const listKeyResults = {};
+
+    await shortInputPage.click(".cm-content");
+    await shortInputPage.keyboard.press("Control+A");
+    await shortInputPage.keyboard.press("Backspace");
+    await shortInputPage.keyboard.type("- item");
+    await shortInputPage.keyboard.press("Enter");
+    await shortInputPage.keyboard.type("a");
+    await shortInputPage.waitForTimeout(100);
+    listKeyResults.enterCreatesNextItemBefore = await shortInputPage.evaluate(() =>
+      [...document.querySelectorAll(".cm-content .cm-line")].map(
+        (line) => line.textContent,
+      ),
+    );
+    await shortInputPage.keyboard.press("Enter");
+    await shortInputPage.waitForTimeout(100);
+    listKeyResults.enterCreatesNextItemAfter = await shortInputPage.evaluate(() =>
+      [...document.querySelectorAll(".cm-content .cm-line")].map(
+        (line) => line.textContent,
+      ),
+    );
+    await shortInputPage.keyboard.press("Enter");
+    await shortInputPage.waitForTimeout(100);
+    listKeyResults.emptyItemEnterExits = await shortInputPage.evaluate(() =>
+      [...document.querySelectorAll(".cm-content .cm-line")].map(
+        (line) => line.textContent,
+      ),
+    );
+
+    assert.deepEqual(listKeyResults.enterCreatesNextItemBefore.slice(0, 2), [
+      "• item",
+      "- a",
+    ]);
+    assert.deepEqual(listKeyResults.enterCreatesNextItemAfter.slice(0, 3), [
+      "• item",
+      "• a",
+      "- ",
+    ]);
+    assert.deepEqual(listKeyResults.emptyItemEnterExits.slice(0, 3), [
+      "• item",
+      "• a",
+      "",
+    ]);
+
+    await shortInputPage.click(".cm-content");
+    await shortInputPage.keyboard.press("Control+A");
+    await shortInputPage.keyboard.press("Backspace");
+    await shortInputPage.keyboard.type("- item");
+    await shortInputPage.keyboard.press("Shift+Enter");
+    await shortInputPage.keyboard.type("a");
+    await shortInputPage.keyboard.press("Enter");
+    await shortInputPage.waitForTimeout(100);
+    listKeyResults.shiftEnterContinuation = await shortInputPage.evaluate(() =>
+      [...document.querySelectorAll(".cm-content .cm-line")].map(
+        (line) => line.textContent,
+      ),
+    );
+    assert.deepEqual(listKeyResults.shiftEnterContinuation.slice(0, 3), [
+      "• item",
+      "  a",
+      "",
+    ]);
+
+    listKeyResults.pastedContinuationResults = [];
+
+    for (const text of ["a", "aa", ";", "^", "＾", "あ", "ああ"]) {
+      await shortInputPage.click(".cm-content");
+      await shortInputPage.keyboard.press("Control+A");
+      await shortInputPage.keyboard.press("Backspace");
+      await shortInputPage.keyboard.insertText(`- item\n  ${text}`);
+      await shortInputPage.keyboard.press("End");
+      await shortInputPage.keyboard.press("Enter");
+      await shortInputPage.waitForTimeout(100);
+      listKeyResults.pastedContinuationResults.push({
+        text,
+        lines: await shortInputPage.evaluate(() =>
+          [...document.querySelectorAll(".cm-content .cm-line")].map(
+            (line) => line.textContent,
+          ),
+        ),
+      });
+    }
+
+    for (const result of listKeyResults.pastedContinuationResults) {
+      assert.equal(result.lines[0], "• item");
+      assert.equal(result.lines[1], `  ${result.text}`);
+      assert.equal(result.lines[2], "");
+    }
 
     console.log(
       JSON.stringify(
@@ -178,11 +381,16 @@ async function run() {
           desktop: metrics,
           afterParagraphClick,
           afterHeadingClick,
+          afterRuleClick,
+          afterRuleEdit,
           afterCodeBlockClick,
           afterCodeEdit,
           afterTableClick,
           afterTableEdit,
           mobile: mobileMetrics,
+          bareUrlState,
+          shortInputResults,
+          listKeyResults,
           screenshots: [
             `${outputDir}/live-preview-desktop.png`,
             `${outputDir}/live-preview-mobile.png`,

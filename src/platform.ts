@@ -229,6 +229,45 @@ export async function printMarkdownHtml(html: string) {
   printWindow.print();
 }
 
+function normalizedExternalUrl(url: string) {
+  const trimmedUrl = url.trim();
+
+  if (/^https?:\/\//i.test(trimmedUrl)) {
+    return trimmedUrl;
+  }
+
+  if (/^(mailto|tel):/i.test(trimmedUrl)) {
+    return trimmedUrl;
+  }
+
+  if (/^www\./i.test(trimmedUrl)) {
+    return `https://${trimmedUrl}`;
+  }
+
+  return null;
+}
+
+export async function openExternalUrl(url: string) {
+  const normalizedUrl = normalizedExternalUrl(url);
+
+  if (!normalizedUrl) {
+    return;
+  }
+
+  if (isTauriRuntime()) {
+    try {
+      await invoke("open_external_url", {
+        url: normalizedUrl,
+      });
+      return;
+    } catch {
+      // Fall through to browser behavior in dev-like runtimes.
+    }
+  }
+
+  window.open(normalizedUrl, "_blank", "noopener,noreferrer");
+}
+
 export async function listenToMenuActions(
   onAction: (action: MenuAction) => void,
 ): Promise<UnlistenFn | null> {

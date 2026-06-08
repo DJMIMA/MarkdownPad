@@ -32,6 +32,7 @@ import {
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { livePreview } from "./livePreview";
+import { markdownPadKeymap } from "./markdownKeymap";
 
 interface MarkdownEditorProps {
   value: string;
@@ -150,11 +151,23 @@ function editorTheme(zoom: number) {
       fontStyle: "italic",
     },
     ".cm-line .cm-link": {
-      color: "#075f6a",
+      color: "#0b57d0",
       textDecoration: "underline",
     },
+    ".cm-md-clickable-link": {
+      color: "#0b57d0 !important",
+      cursor: "pointer",
+      textDecoration: "underline",
+    },
+    ".cm-md-clickable-link span": {
+      color: "#0b57d0 !important",
+      textDecoration: "underline",
+    },
+    ".cm-md-clickable-link:hover, .cm-md-clickable-link:hover span": {
+      color: "#063f9e !important",
+    },
     ".cm-line .cm-url": {
-      color: "#586069",
+      color: "inherit",
     },
     ".cm-line .cm-monospace, .cm-line .cm-inlineCode": {
       fontFamily: '"Cascadia Mono", "Consolas", monospace',
@@ -208,7 +221,7 @@ function editorTheme(zoom: number) {
       overflow: "hidden",
       cursor: "text",
     },
-    ".cm-md-code-block:focus, .cm-md-table-wrapper:focus": {
+    ".cm-md-code-block:focus, .cm-md-table-wrapper:focus, .cm-md-horizontal-rule:focus": {
       outline: "2px solid #79aeb4",
       outlineOffset: "2px",
     },
@@ -247,6 +260,20 @@ function editorTheme(zoom: number) {
       padding: "7px 10px",
       border: "1px solid #d6ddd9",
       textAlign: "left",
+    },
+    ".cm-md-horizontal-rule": {
+      display: "flex",
+      alignItems: "center",
+      minHeight: "2.2em",
+      margin: "0.45em 0 0.65em",
+      cursor: "text",
+    },
+    ".cm-md-horizontal-rule hr": {
+      width: "100%",
+      height: "1px",
+      margin: "0",
+      border: "0",
+      backgroundColor: "#c8d8db",
     },
     ".cm-md-image-preview": {
       display: "inline-flex",
@@ -429,6 +456,7 @@ function MarkdownEditor({
         syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
         bracketMatching(),
         markdown({
+          addKeymap: false,
           extensions: [GFM],
         }),
         search({
@@ -438,6 +466,7 @@ function MarkdownEditor({
         livePreview,
         highlightActiveLine(),
         scrollListener,
+        markdownPadKeymap,
         keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
         wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
         themeCompartment.of(editorTheme(zoom)),

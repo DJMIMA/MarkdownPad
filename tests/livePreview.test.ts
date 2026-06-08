@@ -19,12 +19,14 @@ test("live preview hides source-only markdown marks outside the active range", (
   assert.equal(shouldHideMarkdownNode("QuoteMark"), true);
   assert.equal(shouldHideMarkdownNode("EmphasisMark"), true);
   assert.equal(shouldHideMarkdownNode("LinkMark"), true);
+  assert.equal(shouldHideMarkdownNode("URL"), false);
   assert.equal(shouldHideMarkdownNode("Paragraph"), false);
 });
 
 test("structural blocks are rendered as preview widgets when inactive", () => {
   assert.equal(isStructuralBlock("FencedCode"), true);
   assert.equal(isStructuralBlock("Table"), true);
+  assert.equal(isStructuralBlock("HorizontalRule"), true);
   assert.equal(isStructuralBlock("Blockquote"), false);
 });
 

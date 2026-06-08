@@ -13,6 +13,7 @@ import {
   loadRecoverySnapshot,
   saveRecoverySnapshot,
   isTauriRuntime,
+  openExternalUrl,
 } from "./platform";
 import {
   countWords,
@@ -383,6 +384,19 @@ function App() {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    function onOpenUrl(event: Event) {
+      const url = (event as CustomEvent<string>).detail;
+
+      if (typeof url === "string") {
+        void openExternalUrl(url);
+      }
+    }
+
+    window.addEventListener("markdownpad-open-url", onOpenUrl);
+    return () => window.removeEventListener("markdownpad-open-url", onOpenUrl);
   }, []);
 
   return (
