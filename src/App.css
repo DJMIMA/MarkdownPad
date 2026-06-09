@@ -110,6 +110,22 @@
   --mp-ed-btn-hover-bg: #e3eded;
   --mp-ed-btn-hover-border: #bdd0d2;
 
+  /* Markdown source syntax highlight (matches CodeMirror's default style) */
+  --mp-hl-meta: #404740;
+  --mp-hl-keyword: #770088;
+  --mp-hl-atom: #221199;
+  --mp-hl-literal: #116644;
+  --mp-hl-string: #aa1111;
+  --mp-hl-escape: #ee4400;
+  --mp-hl-def: #0000ff;
+  --mp-hl-local: #3300aa;
+  --mp-hl-type: #008855;
+  --mp-hl-class: #116677;
+  --mp-hl-special: #225566;
+  --mp-hl-property: #0000cc;
+  --mp-hl-comment: #994400;
+  --mp-hl-invalid: #ff0000;
+
   color: var(--mp-text);
   background: var(--mp-bg);
   font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
@@ -215,6 +231,22 @@
   --mp-ed-btn-fg: #cbd6da;
   --mp-ed-btn-hover-bg: #2a353c;
   --mp-ed-btn-hover-border: #3c4951;
+
+  /* Markdown source syntax highlight — brightened for the dark background */
+  --mp-hl-meta: #97a39d;
+  --mp-hl-keyword: #d291ff;
+  --mp-hl-atom: #8fb6ff;
+  --mp-hl-literal: #74d6a0;
+  --mp-hl-string: #ff9d8c;
+  --mp-hl-escape: #ffb06a;
+  --mp-hl-def: #82abff;
+  --mp-hl-local: #c79bff;
+  --mp-hl-type: #57cb9d;
+  --mp-hl-class: #5cc6cf;
+  --mp-hl-special: #86bcdc;
+  --mp-hl-property: #79a8ff;
+  --mp-hl-comment: #b6a06a;
+  --mp-hl-invalid: #ff6b6b;
 }
 
 html,
