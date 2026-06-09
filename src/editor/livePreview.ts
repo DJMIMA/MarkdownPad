@@ -614,6 +614,24 @@ function caretPositionFromPoint(event: MouseEvent) {
     : null;
 }
 
+function clampToDocument(view: EditorView, position: number) {
+  return Math.min(Math.max(position, 0), view.state.doc.length);
+}
+
+function domCaretPosition(view: EditorView, event: MouseEvent) {
+  const caret = caretPositionFromPoint(event);
+
+  if (!caret || !view.contentDOM.contains(caret.node)) {
+    return null;
+  }
+
+  try {
+    return clampToDocument(view, view.posAtDOM(caret.node, caret.offset));
+  } catch {
+    return null;
+  }
+}
+
 function clickedLinePosition(
   view: EditorView,
   lineElement: HTMLElement,
@@ -677,18 +695,30 @@ function lineElementAtPoint(event: MouseEvent) {
 }
 
 function editorPositionAtPoint(view: EditorView, event: MouseEvent) {
+  // Resolve the source position straight from the rendered DOM. CodeMirror's
+  // posAtCoords relies on the height map, which drifts from the real layout in
+  // long documents with many block widgets (tables): blocks scrolled far out of
+  // view fall back to estimated heights, so the drag head would jump to the
+  // wrong line the further down you go. Hit-testing the actual DOM always
+  // tracks the pointer, matching how clicks already resolve their position.
+  const domPosition = domCaretPosition(view, event);
+
+  if (domPosition !== null) {
+    return domPosition;
+  }
+
+  const lineElement = lineElementAtPoint(event);
+
+  if (lineElement) {
+    return clickedLinePosition(view, lineElement, event);
+  }
+
   const position = view.posAtCoords({
     x: event.clientX,
     y: event.clientY,
   });
 
-  if (typeof position === "number") {
-    return Math.min(Math.max(position, 0), view.state.doc.length);
-  }
-
-  const lineElement = lineElementAtPoint(event);
-
-  return lineElement ? clickedLinePosition(view, lineElement, event) : null;
+  return typeof position === "number" ? clampToDocument(view, position) : null;
 }
 
 function installLineSelectionDrag(
