@@ -9,7 +9,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import {
   bracketMatching,
-  defaultHighlightStyle,
+  HighlightStyle,
   indentOnInput,
   syntaxHighlighting,
 } from "@codemirror/language";
@@ -37,6 +37,7 @@ import {
   type Panel,
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
+import { tags } from "@lezer/highlight";
 import { livePreview } from "./livePreview";
 import { markdownPadKeymap } from "./markdownKeymap";
 
@@ -299,6 +300,42 @@ class MarkdownPadSearchPanel implements Panel {
     this.regexpButton.classList.toggle("active", query.regexp);
   }
 }
+
+// A Markdown-source highlight style whose colors come from CSS variables, so a
+// single data-theme flip restyles the revealed Markdown source (such as the
+// `---` horizontal-rule token) without reconfiguring the editor. The light
+// values match CodeMirror's defaultHighlightStyle; the dark values are
+// brightened in App.css for contrast against the dark editor background.
+const markdownHighlightStyle = HighlightStyle.define([
+  { tag: tags.meta, color: "var(--mp-hl-meta)" },
+  { tag: tags.link, textDecoration: "underline" },
+  { tag: tags.heading, textDecoration: "underline", fontWeight: "bold" },
+  { tag: tags.emphasis, fontStyle: "italic" },
+  { tag: tags.strong, fontWeight: "bold" },
+  { tag: tags.strikethrough, textDecoration: "line-through" },
+  { tag: tags.keyword, color: "var(--mp-hl-keyword)" },
+  {
+    tag: [tags.atom, tags.bool, tags.url, tags.contentSeparator, tags.labelName],
+    color: "var(--mp-hl-atom)",
+  },
+  { tag: [tags.literal, tags.inserted], color: "var(--mp-hl-literal)" },
+  { tag: [tags.string, tags.deleted], color: "var(--mp-hl-string)" },
+  {
+    tag: [tags.regexp, tags.escape, tags.special(tags.string)],
+    color: "var(--mp-hl-escape)",
+  },
+  { tag: tags.definition(tags.variableName), color: "var(--mp-hl-def)" },
+  { tag: tags.local(tags.variableName), color: "var(--mp-hl-local)" },
+  { tag: [tags.typeName, tags.namespace], color: "var(--mp-hl-type)" },
+  { tag: tags.className, color: "var(--mp-hl-class)" },
+  {
+    tag: [tags.special(tags.variableName), tags.macroName],
+    color: "var(--mp-hl-special)",
+  },
+  { tag: tags.definition(tags.propertyName), color: "var(--mp-hl-property)" },
+  { tag: tags.comment, color: "var(--mp-hl-comment)" },
+  { tag: tags.invalid, color: "var(--mp-hl-invalid)" },
+]);
 
 function editorTheme(zoom: number, wordWrap: boolean) {
   const fontSize = Math.max(13, Math.round(15 * (zoom / 100)));
@@ -809,7 +846,7 @@ function MarkdownEditor({
         highlightActiveLineGutter(),
         history(),
         indentOnInput(),
-        syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+        syntaxHighlighting(markdownHighlightStyle, { fallback: true }),
         bracketMatching(),
         markdown({
           addKeymap: false,
