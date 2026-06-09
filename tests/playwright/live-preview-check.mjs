@@ -1009,6 +1009,96 @@ async function run() {
       zoom: "100%",
     });
 
+    const searchHighlightPage = await browser.newPage({
+      viewport: {
+        width: 1100,
+        height: 800,
+      },
+    });
+    await searchHighlightPage.goto(blankUrl, {
+      waitUntil: "networkidle",
+    });
+    await searchHighlightPage.waitForSelector(".cm-content");
+    await searchHighlightPage.click(".cm-content");
+    await searchHighlightPage.keyboard.press("Control+A");
+    await searchHighlightPage.keyboard.press("Backspace");
+    await searchHighlightPage.keyboard.insertText(
+      "Intro mentions needle once.\n\n| Name | Note |\n| --- | --- |\n| needle | inside a cell |\n\n```ts\nconst v = findNeedle(haystack);\n```\n\nTrailing line.",
+    );
+    await searchHighlightPage.locator(".cm-content .cm-line").first().click();
+    await searchHighlightPage.waitForSelector(".cm-md-table-wrapper table");
+    await searchHighlightPage.waitForSelector(".cm-md-code-block pre");
+
+    const searchHighlightErrors = [];
+    searchHighlightPage.on("console", (message) => {
+      if (message.type() === "error" && !message.text().includes("React DevTools")) {
+        searchHighlightErrors.push(message.text());
+      }
+    });
+    searchHighlightPage.on("pageerror", (error) =>
+      searchHighlightErrors.push(error.message),
+    );
+
+    const snapshotSearchHighlight = () =>
+      searchHighlightPage.evaluate(() => ({
+        searchMatches: document.querySelectorAll(".cm-searchMatch").length,
+        selectedMatches: document.querySelectorAll(".cm-searchMatch-selected").length,
+        tableWidgets: document.querySelectorAll(".cm-md-table-wrapper table").length,
+        codeWidgets: document.querySelectorAll(".cm-md-code-block pre").length,
+        matchesInTable: document.querySelectorAll(
+          ".cm-md-table-wrapper .cm-searchMatch",
+        ).length,
+        matchesInCode: document.querySelectorAll(
+          ".cm-md-code-block .cm-searchMatch",
+        ).length,
+        selectedInTable: document.querySelectorAll(
+          ".cm-md-table-wrapper .cm-searchMatch-selected",
+        ).length,
+      }));
+
+    const beforeSearchHighlight = await snapshotSearchHighlight();
+    assert.equal(beforeSearchHighlight.searchMatches, 0);
+    assert.equal(beforeSearchHighlight.tableWidgets, 1);
+    assert.equal(beforeSearchHighlight.codeWidgets, 1);
+
+    await searchHighlightPage.keyboard.press("Control+F");
+    await searchHighlightPage.waitForSelector(
+      ".cm-md-search-panel[data-mode='search']",
+    );
+    await searchHighlightPage.locator(".cm-md-search-input").fill("needle");
+    await waitForAnimationFrame(searchHighlightPage);
+
+    // The reported bug: matches inside tables and code blocks were recognized
+    // but never highlighted, because the source text was hidden behind block
+    // widgets. The fix highlights matches in place WITHOUT breaking the rendered
+    // table/code block, so the table and code widgets stay visible.
+    const duringSearchHighlight = await snapshotSearchHighlight();
+    assert.equal(duringSearchHighlight.tableWidgets, 1);
+    assert.equal(duringSearchHighlight.codeWidgets, 1);
+    assert.equal(duringSearchHighlight.searchMatches, 3);
+    assert.equal(duringSearchHighlight.matchesInTable, 1);
+    assert.equal(duringSearchHighlight.matchesInCode, 1);
+
+    // Navigating to the table match marks it as the active (selected) match,
+    // still inside the rendered table.
+    await searchHighlightPage.locator(".cm-md-search-input").press("Enter");
+    await searchHighlightPage.locator(".cm-md-search-input").press("Enter");
+    await waitForAnimationFrame(searchHighlightPage);
+    const activeSearchHighlight = await snapshotSearchHighlight();
+    assert.equal(activeSearchHighlight.tableWidgets, 1);
+    assert.equal(activeSearchHighlight.selectedInTable, 1, JSON.stringify(activeSearchHighlight));
+
+    await searchHighlightPage.keyboard.press("Escape");
+    await searchHighlightPage.waitForSelector(".cm-md-search-panel", {
+      state: "detached",
+    });
+    await searchHighlightPage.waitForSelector(".cm-md-table-wrapper table");
+    const afterSearchHighlight = await snapshotSearchHighlight();
+    assert.equal(afterSearchHighlight.searchMatches, 0);
+    assert.equal(afterSearchHighlight.tableWidgets, 1);
+    assert.equal(afterSearchHighlight.codeWidgets, 1);
+    assert.deepEqual(searchHighlightErrors, []);
+
     const mobilePage = await browser.newPage({
       viewport: {
         width: 390,
@@ -1208,6 +1298,10 @@ async function run() {
           afterTableHeavyCellClick,
           noWrapMetrics,
           shortcutMetrics,
+          beforeSearchHighlight,
+          duringSearchHighlight,
+          activeSearchHighlight,
+          afterSearchHighlight,
           mobile: mobileMetrics,
           bareUrlState,
           shortInputResults,
