@@ -1,4 +1,10 @@
 import { syntaxTree } from "@codemirror/language";
+import {
+  getSearchQuery,
+  searchPanelOpen,
+  SearchQuery,
+  setSearchQuery,
+} from "@codemirror/search";
 import type { Range } from "@codemirror/state";
 import {
   EditorSelection,
@@ -148,6 +154,185 @@ function sourceRangesForSelection(state: EditorState): SourceRanges {
   }
 
   return ranges;
+}
+
+type HighlightSegment = {
+  text: string;
+  match: boolean;
+  selected: boolean;
+};
+
+export function searchMatchRanges(
+  state: EditorState,
+  query: SearchQuery,
+): SourceRange[] {
+  if (!query.search || !query.valid) {
+    return [];
+  }
+
+  const ranges: SourceRange[] = [];
+  const cursor = query.getCursor(state);
+
+  for (let next = cursor.next(); !next.done; next = cursor.next()) {
+    if (next.value.to > next.value.from) {
+      ranges.push({
+        from: next.value.from,
+        to: next.value.to,
+      });
+    }
+  }
+
+  return ranges;
+}
+
+function activeSearchMatches(state: EditorState): SourceRange[] {
+  if (!searchPanelOpen(state)) {
+    return [];
+  }
+
+  return searchMatchRanges(state, getSearchQuery(state));
+}
+
+// Horizontal rules render as an <hr> with no text, so a match inside `---` can
+// only be shown by revealing its source. Tables and code blocks keep their
+// rendering and highlight matches in place instead.
+function horizontalRuleMatchRanges(
+  state: EditorState,
+  matches: SourceRange[],
+): SourceRange[] {
+  if (matches.length === 0) {
+    return [];
+  }
+
+  const tree = syntaxTree(state);
+  const ranges: SourceRange[] = [];
+
+  tree.iterate({
+    enter(node) {
+      if (node.name !== "HorizontalRule") {
+        return;
+      }
+
+      if (matches.some((match) => match.from < node.to && node.from < match.to)) {
+        ranges.push({
+          from: node.from,
+          to: node.to,
+        });
+      }
+    },
+  });
+
+  return ranges;
+}
+
+// Split a run of widget text (a table cell or code body) into plain and
+// highlighted segments, given search matches expressed in document coordinates.
+export function splitTextByMatches(
+  text: string,
+  docFrom: number,
+  matches: SourceRange[],
+  selected: SourceRange | null,
+): HighlightSegment[] {
+  const docTo = docFrom + text.length;
+  const local = matches
+    .map((match) => ({
+      from: Math.max(match.from, docFrom) - docFrom,
+      to: Math.min(match.to, docTo) - docFrom,
+    }))
+    .filter((match) => match.to > match.from)
+    .sort((first, second) => first.from - second.from);
+
+  if (local.length === 0) {
+    return [{ text, match: false, selected: false }];
+  }
+
+  const segments: HighlightSegment[] = [];
+  let cursor = 0;
+
+  for (const match of local) {
+    const from = Math.max(match.from, cursor);
+
+    if (from >= match.to) {
+      continue;
+    }
+
+    if (from > cursor) {
+      segments.push({
+        text: text.slice(cursor, from),
+        match: false,
+        selected: false,
+      });
+    }
+
+    const isSelected =
+      selected != null &&
+      selected.from < docFrom + match.to &&
+      docFrom + from < selected.to;
+
+    segments.push({
+      text: text.slice(from, match.to),
+      match: true,
+      selected: isSelected,
+    });
+    cursor = match.to;
+  }
+
+  if (cursor < text.length) {
+    segments.push({
+      text: text.slice(cursor),
+      match: false,
+      selected: false,
+    });
+  }
+
+  return segments;
+}
+
+function highlightedTextFragment(
+  text: string,
+  docFrom: number,
+  matches: SourceRange[],
+  selected: SourceRange | null,
+): DocumentFragment {
+  const fragment = document.createDocumentFragment();
+
+  for (const segment of splitTextByMatches(text, docFrom, matches, selected)) {
+    if (!segment.match) {
+      fragment.append(textNode(segment.text));
+      continue;
+    }
+
+    const mark = document.createElement("span");
+    mark.className = segment.selected
+      ? "cm-searchMatch cm-searchMatch-selected"
+      : "cm-searchMatch";
+    mark.textContent = segment.text;
+    fragment.append(mark);
+  }
+
+  return fragment;
+}
+
+function sameRange(first: SourceRange | null, second: SourceRange | null) {
+  if (first === second) {
+    return true;
+  }
+
+  if (!first || !second) {
+    return false;
+  }
+
+  return first.from === second.from && first.to === second.to;
+}
+
+function sameRanges(first: SourceRange[], second: SourceRange[]) {
+  return (
+    first.length === second.length &&
+    first.every(
+      (range, index) =>
+        range.from === second[index].from && range.to === second[index].to,
+    )
+  );
 }
 
 function isInSourceRange(node: SyntaxNodeRef, ranges: SourceRange[]) {
@@ -1174,13 +1359,22 @@ class CodeBlockWidget extends WidgetType {
   private readonly language: string;
   private readonly body: string;
   private readonly editAt: number;
+  private readonly matches: SourceRange[];
+  private readonly selected: SourceRange | null;
 
-  constructor(markdown: string, editAt: number) {
+  constructor(
+    markdown: string,
+    editAt: number,
+    matches: SourceRange[] = [],
+    selected: SourceRange | null = null,
+  ) {
     super();
     const parsed = parseCodeFence(markdown);
     this.language = parsed.language;
     this.body = parsed.body;
     this.editAt = editAt;
+    this.matches = matches;
+    this.selected = selected;
   }
 
   eq(widget: WidgetType) {
@@ -1188,7 +1382,9 @@ class CodeBlockWidget extends WidgetType {
       widget instanceof CodeBlockWidget &&
       widget.language === this.language &&
       widget.body === this.body &&
-      widget.editAt === this.editAt
+      widget.editAt === this.editAt &&
+      sameRanges(widget.matches, this.matches) &&
+      sameRange(widget.selected, this.selected)
     );
   }
 
@@ -1269,7 +1465,9 @@ class CodeBlockWidget extends WidgetType {
 
     const pre = document.createElement("pre");
     const code = document.createElement("code");
-    code.textContent = this.body;
+    code.append(
+      highlightedTextFragment(this.body, this.editAt, this.matches, this.selected),
+    );
     pre.append(code);
     wrapper.append(pre);
 
@@ -1283,8 +1481,15 @@ class TableWidget extends WidgetType {
   private readonly headerCells: TableCellSource[];
   private readonly rowCells: TableCellSource[][];
   private readonly editAt: number;
+  private readonly matches: SourceRange[];
+  private readonly selected: SourceRange | null;
 
-  constructor(markdown: string, editAt: number) {
+  constructor(
+    markdown: string,
+    editAt: number,
+    matches: SourceRange[] = [],
+    selected: SourceRange | null = null,
+  ) {
     super();
     const parsed = parseMarkdownTable(markdown);
     this.headers = parsed.headers;
@@ -1292,6 +1497,8 @@ class TableWidget extends WidgetType {
     this.headerCells = parsed.headerCells;
     this.rowCells = parsed.rowCells;
     this.editAt = editAt;
+    this.matches = matches;
+    this.selected = selected;
   }
 
   get estimatedHeight() {
@@ -1307,7 +1514,22 @@ class TableWidget extends WidgetType {
       JSON.stringify(widget.rows) === JSON.stringify(this.rows) &&
       JSON.stringify(widget.headerCells) === JSON.stringify(this.headerCells) &&
       JSON.stringify(widget.rowCells) === JSON.stringify(this.rowCells) &&
-      widget.editAt === this.editAt
+      widget.editAt === this.editAt &&
+      sameRanges(widget.matches, this.matches) &&
+      sameRange(widget.selected, this.selected)
+    );
+  }
+
+  private cellContent(source: TableCellSource | undefined, fallback: string) {
+    if (!source) {
+      return textNode(fallback);
+    }
+
+    return highlightedTextFragment(
+      source.text,
+      this.editAt + source.from,
+      this.matches,
+      this.selected,
     );
   }
 
@@ -1598,7 +1820,7 @@ class TableWidget extends WidgetType {
         row: 0,
         column: index,
       });
-      cell.append(textNode(header));
+      cell.append(this.cellContent(this.headerCells[index], header));
       headerRow.append(cell);
     }
 
@@ -1617,7 +1839,9 @@ class TableWidget extends WidgetType {
           row: rowIndex + 1,
           column: cellIndex,
         });
-        cell.append(textNode(cellValue));
+        cell.append(
+          this.cellContent(this.rowCells[rowIndex]?.[cellIndex], cellValue),
+        );
         tableRow.append(cell);
       }
 
@@ -1726,6 +1950,14 @@ function imageParts(markdown: string) {
 function buildLivePreviewDecorations(state: EditorState): DecorationSet {
   const decorations: PreviewDecoration[] = [];
   const sourceRanges = sourceRangesForSelection(state);
+  const searchMatches = activeSearchMatches(state);
+  const mainSelection = state.selection.main;
+
+  for (const range of horizontalRuleMatchRanges(state, searchMatches)) {
+    sourceRanges.all.push(range);
+    sourceRanges.structural.push(range);
+  }
+
   const tree = syntaxTree(state);
 
   for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
@@ -1796,12 +2028,22 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
           node.name === "FencedCode" && firstLine.to < node.to
             ? firstLine.to + 1
             : node.from;
+        const blockMatches = searchMatches.filter(
+          (match) => match.from < node.to && node.from < match.to,
+        );
+        const blockSelected =
+          blockMatches.length > 0 &&
+          !mainSelection.empty &&
+          mainSelection.from < node.to &&
+          node.from < mainSelection.to
+            ? { from: mainSelection.from, to: mainSelection.to }
+            : null;
         let widget: WidgetType;
 
         if (node.name === "FencedCode") {
-          widget = new CodeBlockWidget(text, editAt);
+          widget = new CodeBlockWidget(text, editAt, blockMatches, blockSelected);
         } else if (node.name === "Table") {
-          widget = new TableWidget(text, editAt);
+          widget = new TableWidget(text, editAt, blockMatches, blockSelected);
         } else {
           widget = new HorizontalRuleWidget(text, editAt);
         }
@@ -1945,7 +2187,12 @@ const livePreviewField = StateField.define<DecorationSet>({
     return buildLivePreviewDecorations(state);
   },
   update(decorations, transaction) {
-    if (transaction.docChanged || transaction.selection) {
+    if (
+      transaction.docChanged ||
+      transaction.selection ||
+      transaction.effects.some((effect) => effect.is(setSearchQuery)) ||
+      searchPanelOpen(transaction.startState) !== searchPanelOpen(transaction.state)
+    ) {
       return buildLivePreviewDecorations(transaction.state);
     }
 
