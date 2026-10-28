@@ -26,13 +26,18 @@ export function TabStrip({
           aria-selected={tab.id === activeTabId}
           onClick={() => onSelect(tab.id)}
         >
-          <span className="tab-title">
-            {tab.dirty ? `${tab.title} *` : tab.title}
+          <span className="tab-title" title={tab.path ?? tab.title}>
+            {tab.title}
           </span>
           <span
-            className="close-tab"
+            className={tab.dirty ? "close-tab is-dirty" : "close-tab"}
             role="button"
-            aria-label={`${tab.title} を閉じる`}
+            aria-label={
+              tab.dirty
+                ? `${tab.title}（未保存）を閉じる`
+                : `${tab.title} を閉じる`
+            }
+            title={tab.dirty ? "未保存の変更があります" : undefined}
             tabIndex={0}
             onClick={(event) => {
               event.stopPropagation();

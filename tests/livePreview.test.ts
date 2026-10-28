@@ -8,6 +8,7 @@ import {
   headingLevelForNode,
   isStructuralBlock,
   listMarkerLabel,
+  listMarkerWidthEm,
   searchMatchRanges,
   shouldHideMarkdownNode,
   splitTextByMatches,
@@ -70,6 +71,19 @@ test("listMarkerLabel keeps ordered markers and normalizes bullets", () => {
   assert.equal(listMarkerLabel("1."), "1.");
   assert.equal(listMarkerLabel("23)"), "23)");
   assert.equal(listMarkerLabel("-"), "•");
+});
+
+test("listMarkerWidthEm reserves a fixed slot for bullets and tasks", () => {
+  assert.equal(listMarkerWidthEm("-", false), 1.45);
+  assert.equal(listMarkerWidthEm("*", false), 1.45);
+  assert.equal(listMarkerWidthEm("-", true), 1.5);
+  assert.equal(listMarkerWidthEm("1.", true), 1.5);
+});
+
+test("listMarkerWidthEm widens ordered markers with their digit count", () => {
+  assert.equal(listMarkerWidthEm("1.", false), 1.7);
+  assert.ok(listMarkerWidthEm("10.", false) > listMarkerWidthEm("9.", false));
+  assert.ok(listMarkerWidthEm("100)", false) > listMarkerWidthEm("10)", false));
 });
 
 test("searchMatchRanges finds every match across paragraphs, tables, and code", () => {
