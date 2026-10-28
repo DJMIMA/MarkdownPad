@@ -861,7 +861,6 @@ function dispatchCursorToClickedLine(
   event: MouseEvent,
 ) {
   clearTableCellSelection(view);
-  window.getSelection()?.removeAllRanges();
   view.dispatch({
     selection: EditorSelection.cursor(
       clickedLinePosition(view, lineElement, event),
@@ -985,7 +984,6 @@ const structuralSourceLineMouseDownHandler = EditorView.domEventHandlers({
     suppressNextVisualLineClick(view);
     clearTableCellSelection(view);
     const anchor = clickedLinePosition(view, lineElement, event);
-    window.getSelection()?.removeAllRanges();
     view.dispatch({
       selection: EditorSelection.cursor(anchor),
       scrollIntoView: true,
@@ -1034,7 +1032,6 @@ const visualLineMouseDownHandler = EditorView.domEventHandlers({
     clearTableCellSelection(view);
 
     const anchor = clickedLinePosition(view, lineElement, event);
-    window.getSelection()?.removeAllRanges();
     view.dispatch({
       selection: EditorSelection.cursor(anchor),
       scrollIntoView: true,
@@ -1063,9 +1060,14 @@ const visualLineClickHandler = EditorView.domEventHandlers({
     }
 
     if (consumeSuppressedVisualLineClick(view)) {
+      // The mousedown handler already placed the cursor and CodeMirror wrote
+      // the matching DOM selection. Never clear the DOM selection around these
+      // dispatches: CodeMirror only rewrites it when its cached copy differs,
+      // so the focused editor would be left without a native caret and typing
+      // (including IME composition) would do nothing until a key like
+      // ArrowLeft re-synced it.
       event.preventDefault();
       event.stopPropagation();
-      window.getSelection()?.removeAllRanges();
       return true;
     }
 
@@ -1321,7 +1323,6 @@ function textNode(value: string) {
 
 function revealSourceBlock(view: EditorView, position: number) {
   clearTableCellSelection(view);
-  window.getSelection()?.removeAllRanges();
   view.dispatch({
     selection: {
       anchor: Math.min(position, view.state.doc.length),
