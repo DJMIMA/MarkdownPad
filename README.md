@@ -216,6 +216,17 @@ cd src-tauri
 cargo check
 ```
 
+## 依存関係の更新
+
+`.github/dependabot.yml` で、npm（リポジトリ直下）と Cargo（`src-tauri`）
+の依存関係を毎週月曜に確認します。minor / patch 更新はエコシステムごとに
+1 つの PR へまとめ、major 更新は個別 PR として確認します。
+
+脆弱性アラートとセキュリティ更新 PR は、GitHub のリポジトリ設定
+（Settings > Code security）で Dependabot alerts と Dependabot security
+updates を有効にして使います。ローカルでは `npm audit` で同じ脆弱性
+データベースを確認できます。
+
 ## ネイティブアプリのビルド
 
 Windows で直接起動できる release exe を作るには、リポジトリ直下で次を
