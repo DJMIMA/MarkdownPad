@@ -35,9 +35,9 @@ MarkdownPad は、単体の Markdown ファイルを軽く開き、美しく読�
   が必要なコードだけを読み込むようにする。WebView2 前提のため Vite の
   ビルドターゲットは `esnext`。
 
-Tauri 開発には Rust/Cargo が必要です。初期確認時点のローカル環境では
-Node.js と npm は利用可能で、Rust/Cargo は後から導入されました。
-導入後、`npm run build` と `cargo check` は通過しています。
+Tauri 開発には Rust/Cargo が必要です。変更の確認には、unit test の
+`npm test`、型検査とフロントエンドビルドの `npm run build`、Rust 側の
+`cargo check`（`src-tauri` で実行）を使う。
 
 ## MVP スコープ
 
