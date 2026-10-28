@@ -31,9 +31,7 @@ import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import {
   EditorView,
   highlightActiveLine,
-  highlightActiveLineGutter,
   keymap,
-  lineNumbers,
   type Panel,
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
@@ -303,13 +301,14 @@ class MarkdownPadSearchPanel implements Panel {
 
 // A Markdown-source highlight style whose colors come from CSS variables, so a
 // single data-theme flip restyles the revealed Markdown source (such as the
-// `---` horizontal-rule token) without reconfiguring the editor. The light
-// values match CodeMirror's defaultHighlightStyle; the dark values are
-// brightened in App.css for contrast against the dark editor background.
+// `---` horizontal-rule token) without reconfiguring the editor. Formatting
+// marks (`#`, `**`, `-`, `>` and so on) are drawn in a faint tone so the
+// revealed source on the cursor line stays quiet, as in Obsidian.
 const markdownHighlightStyle = HighlightStyle.define([
+  { tag: tags.processingInstruction, color: "var(--mp-ed-syntax)" },
   { tag: tags.meta, color: "var(--mp-hl-meta)" },
-  { tag: tags.link, textDecoration: "underline" },
-  { tag: tags.heading, textDecoration: "underline", fontWeight: "bold" },
+  { tag: tags.link, color: "var(--mp-ed-link)" },
+  { tag: tags.heading, fontWeight: "bold" },
   { tag: tags.emphasis, fontStyle: "italic" },
   { tag: tags.strong, fontWeight: "bold" },
   { tag: tags.strikethrough, textDecoration: "line-through" },
@@ -337,8 +336,15 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: tags.invalid, color: "var(--mp-hl-invalid)" },
 ]);
 
+const bodyFont =
+  '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", system-ui, sans-serif';
+const monoFont = '"Cascadia Mono", "Consolas", "BIZ UDGothic", monospace';
+
 function editorTheme(zoom: number, wordWrap: boolean) {
-  const fontSize = Math.max(13, Math.round(15 * (zoom / 100)));
+  const fontSize = Math.max(12, Math.round(16 * (zoom / 100)));
+  // Readable line length: like Obsidian, the note is a centered column of
+  // about 700px at the default size, scaled with zoom.
+  const readableWidth = `${44 * fontSize}px`;
 
   return EditorView.theme({
     "&": {
@@ -348,37 +354,28 @@ function editorTheme(zoom: number, wordWrap: boolean) {
       color: "var(--mp-ed-fg)",
     },
     ".cm-scroller": {
-      fontFamily:
-        '"Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif',
-      lineHeight: "1.7",
+      fontFamily: bodyFont,
+      lineHeight: "1.6",
     },
     ".cm-content": {
-      maxWidth: wordWrap ? "920px" : "none",
+      // CodeMirror sizes .cm-content as border-box, so add the side padding.
+      maxWidth: wordWrap ? `calc(${readableWidth} + 64px)` : "none",
       width: wordWrap ? "auto" : "max-content",
-      minWidth: "100%",
+      minWidth: wordWrap ? "0" : "100%",
       minHeight: "100%",
-      padding: "34px 44px 48px",
+      margin: "0 auto",
+      padding: "28px 32px 30vh",
       // The editor uses the native caret (no drawSelection), whose color the
       // CodeMirror base theme pins to black for non-dark themes. Follow the
       // theme token instead so the caret stays visible in dark mode.
       caretColor: "var(--mp-ed-cursor)",
     },
     ".cm-line": {
-      padding: "0 4px",
+      padding: "0",
       minWidth: wordWrap ? "0" : "max-content",
     },
     ".cm-activeLine": {
-      backgroundColor: "var(--mp-ed-active-line)",
-      outline: "1px solid var(--mp-ed-active-line-outline)",
-    },
-    ".cm-activeLineGutter": {
-      backgroundColor: "var(--mp-ed-active-line)",
-      color: "var(--mp-ed-gutter-active-fg)",
-    },
-    ".cm-gutters": {
-      backgroundColor: "var(--mp-ed-gutter-bg)",
-      borderRight: "1px solid var(--mp-ed-gutter-border)",
-      color: "var(--mp-ed-gutter-fg)",
+      backgroundColor: "transparent",
     },
     ".cm-selectionBackground": {
       backgroundColor: "var(--mp-ed-selection) !important",
@@ -397,50 +394,56 @@ function editorTheme(zoom: number, wordWrap: boolean) {
       backgroundColor: "var(--mp-ed-cell-sel-bg)",
       boxShadow: "inset 0 0 0 2px var(--mp-ed-cell-sel-ring)",
     },
-    ".cm-cursor": {
+    ".cm-cursor, .cm-dropCursor": {
       borderLeftColor: "var(--mp-ed-cursor)",
+      borderLeftWidth: "1.5px",
+    },
+    ".cm-matchingBracket, .cm-nonmatchingBracket": {
+      backgroundColor: "transparent",
+      outline: "none",
     },
     ".cm-line .cm-header": {
       color: "var(--mp-ed-heading)",
-      fontWeight: "700",
       textDecoration: "none",
     },
+    // Heading scale and spacing follow Obsidian's default theme.
     ".cm-md-heading-line": {
       color: "var(--mp-ed-heading)",
-      fontFamily:
-        '"Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif',
-      fontWeight: "800",
-      lineHeight: "1.28",
+      fontWeight: "700",
+      lineHeight: "1.3",
+      letterSpacing: "-0.005em",
       textDecoration: "none",
     },
     ".cm-md-heading-line span": {
       textDecoration: "none !important",
     },
     ".cm-md-heading-1": {
-      fontSize: "2em",
-      paddingTop: "0.42em",
-      paddingBottom: "0.18em",
-      borderBottom: "1px solid var(--mp-ed-heading-rule)",
+      fontSize: "1.8em",
+      paddingTop: "0.5em",
+      paddingBottom: "0.1em",
     },
     ".cm-md-heading-2": {
-      fontSize: "1.55em",
-      paddingTop: "0.38em",
-      paddingBottom: "0.12em",
-    },
-    ".cm-md-heading-3": {
-      fontSize: "1.28em",
-      paddingTop: "0.28em",
+      fontSize: "1.5em",
+      paddingTop: "0.45em",
       paddingBottom: "0.08em",
     },
-    ".cm-md-heading-4": {
-      fontSize: "1.12em",
-      paddingTop: "0.22em",
+    ".cm-md-heading-3": {
+      fontSize: "1.3em",
+      paddingTop: "0.4em",
+      paddingBottom: "0.06em",
     },
-    ".cm-md-heading-5, .cm-md-heading-6": {
+    ".cm-md-heading-4": {
+      fontSize: "1.15em",
+      paddingTop: "0.35em",
+    },
+    ".cm-md-heading-5": {
+      fontSize: "1.05em",
+      paddingTop: "0.3em",
+    },
+    ".cm-md-heading-6": {
       fontSize: "1em",
+      paddingTop: "0.3em",
       color: "var(--mp-ed-heading-muted)",
-      letterSpacing: "0",
-      textTransform: "none",
     },
     ".cm-line .cm-strong": {
       fontWeight: "700",
@@ -450,71 +453,115 @@ function editorTheme(zoom: number, wordWrap: boolean) {
     },
     ".cm-line .cm-link": {
       color: "var(--mp-ed-link)",
-      textDecoration: "underline",
+      textDecoration: "none",
     },
     ".cm-md-clickable-link": {
       color: "var(--mp-ed-link) !important",
       cursor: "pointer",
       textDecoration: "underline",
+      textDecorationThickness: "1px",
+      textUnderlineOffset: "2px",
     },
     ".cm-md-clickable-link span": {
       color: "var(--mp-ed-link) !important",
-      textDecoration: "underline",
     },
     ".cm-md-clickable-link:hover, .cm-md-clickable-link:hover span": {
       color: "var(--mp-ed-link-hover) !important",
     },
     ".cm-line .cm-url": {
-      color: "inherit",
+      color: "var(--mp-ed-syntax)",
     },
-    ".cm-line .cm-monospace, .cm-line .cm-inlineCode": {
-      fontFamily: '"Cascadia Mono", "Consolas", monospace',
+    ".cm-md-inline-code": {
+      fontFamily: monoFont,
+      fontSize: "0.875em",
+      color: "var(--mp-ed-inline-code-fg)",
       backgroundColor: "var(--mp-ed-inline-code-bg)",
-      borderRadius: "4px",
-      padding: "0 3px",
+      borderRadius: "3px",
+      padding: "0.1em 0.25em",
+    },
+    // List items use a hanging indent so wrapped lines line up with the text
+    // after the marker. The indent widths are set per line by livePreview.
+    ".cm-md-list-line": {
+      paddingLeft: "var(--mp-list-indent)",
+      textIndent: "calc(-1 * var(--mp-list-marker))",
+    },
+    ".cm-md-list-continuation": {
+      paddingLeft: "var(--mp-list-indent)",
+    },
+    ".cm-md-list-marker, .cm-md-task-marker": {
+      display: "inline-block",
+      textIndent: "0",
+      verticalAlign: "baseline",
     },
     ".cm-md-list-marker": {
-      display: "inline-block",
-      minWidth: "1.25em",
+      boxSizing: "border-box",
+      width: "var(--mp-list-marker)",
       color: "var(--mp-ed-list-marker)",
-      fontWeight: "700",
+      fontVariantNumeric: "tabular-nums",
+    },
+    // An empty inline-block would sit on the baseline; give the bullet slot
+    // the full line height so the dot centres on the text.
+    ".cm-md-list-marker.bullet": {
+      position: "relative",
+      color: "transparent",
+    },
+    ".cm-md-list-marker.bullet::before": {
+      content: "''",
+      position: "absolute",
+      left: "0.3em",
+      top: "50%",
+      width: "0.32em",
+      height: "0.32em",
+      borderRadius: "50%",
+      backgroundColor: "var(--mp-ed-list-marker)",
+      transform: "translateY(-50%)",
     },
     ".cm-md-task-marker": {
-      display: "inline-block",
+      position: "relative",
+      width: "var(--mp-list-marker)",
+      height: "1em",
+      cursor: "default",
+    },
+    ".cm-md-task-marker::before": {
+      content: "''",
+      position: "absolute",
+      left: "0.05em",
+      top: "0.12em",
+      boxSizing: "border-box",
       width: "0.95em",
       height: "0.95em",
-      marginRight: "0.34em",
-      transform: "translateY(0.12em)",
       border: "1.5px solid var(--mp-ed-task-border)",
       borderRadius: "3px",
-      backgroundColor: "var(--mp-ed-task-bg)",
     },
-    ".cm-md-task-marker.checked": {
-      position: "relative",
-      borderColor: "var(--mp-ed-task-checked-border)",
+    ".cm-md-task-marker.checked::before": {
+      borderColor: "var(--mp-ed-task-checked-bg)",
       backgroundColor: "var(--mp-ed-task-checked-bg)",
     },
     ".cm-md-task-marker.checked::after": {
       content: "''",
       position: "absolute",
-      left: "0.22em",
-      top: "0.06em",
-      width: "0.34em",
-      height: "0.56em",
+      left: "0.37em",
+      top: "0.24em",
+      boxSizing: "border-box",
+      width: "0.3em",
+      height: "0.55em",
       border: "solid var(--mp-ed-task-check)",
       borderWidth: "0 2px 2px 0",
       transform: "rotate(42deg)",
     },
+    ".cm-md-task-done": {
+      color: "var(--mp-ed-task-done-fg)",
+      textDecoration: "line-through",
+    },
     ".cm-md-quote-line": {
-      borderLeft: "3px solid var(--mp-ed-quote-border)",
+      borderLeft: "2px solid var(--mp-ed-quote-border)",
+      paddingLeft: "1em",
       color: "var(--mp-ed-quote-fg)",
-      backgroundColor: "var(--mp-ed-quote-bg)",
     },
     ".cm-md-code-block": {
       position: "relative",
-      margin: "0.75em 0 1em",
-      border: "1px solid var(--mp-ed-code-border)",
-      borderRadius: "8px",
+      margin: "0.35em 0",
+      borderRadius: "4px",
       backgroundColor: "var(--mp-ed-code-bg)",
       overflow: "hidden",
       cursor: "text",
@@ -525,19 +572,19 @@ function editorTheme(zoom: number, wordWrap: boolean) {
     },
     ".cm-md-code-language": {
       position: "absolute",
-      top: "8px",
-      right: "12px",
+      top: "6px",
+      right: "10px",
       color: "var(--mp-ed-code-lang)",
-      fontSize: "0.78em",
-      fontFamily: '"Cascadia Mono", "Consolas", monospace',
+      fontSize: "0.75em",
+      fontFamily: monoFont,
     },
     ".cm-md-code-block pre": {
       margin: "0",
-      padding: "18px 20px",
+      padding: "12px 16px",
       overflowX: "auto",
-      fontFamily: '"Cascadia Mono", "Consolas", monospace',
-      fontSize: "0.92em",
-      lineHeight: "1.6",
+      fontFamily: monoFont,
+      fontSize: "0.875em",
+      lineHeight: "1.55",
       userSelect: "text",
     },
     ".cm-md-code-block code": {
@@ -546,7 +593,7 @@ function editorTheme(zoom: number, wordWrap: boolean) {
     ".cm-md-table-wrapper": {
       width: "fit-content",
       maxWidth: "100%",
-      margin: "0.9em 0 1em",
+      margin: "0.35em 0",
       overflowX: "auto",
       cursor: "text",
     },
@@ -554,15 +601,16 @@ function editorTheme(zoom: number, wordWrap: boolean) {
       width: "max-content",
       maxWidth: "none",
       borderCollapse: "collapse",
-      fontSize: "0.95em",
+      fontSize: "0.94em",
+      lineHeight: "1.5",
     },
     ".cm-md-table-wrapper th": {
       backgroundColor: "var(--mp-ed-th-bg)",
       color: "var(--mp-ed-th-fg)",
-      fontWeight: "700",
+      fontWeight: "600",
     },
     ".cm-md-table-wrapper th, .cm-md-table-wrapper td": {
-      padding: "7px 10px",
+      padding: "5px 12px",
       border: "1px solid var(--mp-ed-table-border)",
       textAlign: "left",
       whiteSpace: "nowrap",
@@ -570,8 +618,8 @@ function editorTheme(zoom: number, wordWrap: boolean) {
     ".cm-md-horizontal-rule": {
       display: "flex",
       alignItems: "center",
-      minHeight: "2.2em",
-      margin: "0.45em 0 0.65em",
+      minHeight: "1.6em",
+      margin: "0.4em 0",
       cursor: "text",
     },
     ".cm-md-horizontal-rule hr": {
@@ -582,17 +630,17 @@ function editorTheme(zoom: number, wordWrap: boolean) {
       backgroundColor: "var(--mp-ed-hr)",
     },
     ".cm-md-image-preview": {
+      textIndent: "0",
       display: "inline-flex",
       flexDirection: "column",
-      gap: "6px",
+      gap: "4px",
       maxWidth: "100%",
-      margin: "0.5em 0",
+      margin: "0.35em 0",
     },
     ".cm-md-image-preview img": {
       maxWidth: "100%",
       maxHeight: "420px",
-      borderRadius: "6px",
-      border: "1px solid var(--mp-ed-img-border)",
+      borderRadius: "4px",
     },
     ".cm-md-image-preview figcaption": {
       color: "var(--mp-ed-caption)",
@@ -600,110 +648,120 @@ function editorTheme(zoom: number, wordWrap: boolean) {
     },
     ".cm-panels": {
       borderTop: "0",
-      borderBottom: "1px solid var(--mp-ed-panel-border)",
       backgroundColor: "var(--mp-ed-panel-bg)",
       color: "var(--mp-ed-panel-fg)",
-      fontFamily:
-        '"Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif',
+      fontFamily: bodyFont,
+      fontSize: "13px",
+    },
+    ".cm-panels.cm-panels-top": {
+      borderBottom: "1px solid var(--mp-ed-panel-border)",
     },
     ".cm-md-search-panel": {
       display: "grid",
-      gap: "6px",
-      padding: "8px",
-      border: "1px solid var(--mp-ed-input-border)",
-      borderRadius: "10px",
-      margin: "8px",
-      backgroundColor: "var(--mp-ed-btn-bg)",
-      boxShadow: "var(--mp-shadow-md)",
+      gap: "4px",
+      maxWidth: `calc(${readableWidth} + 64px)`,
+      margin: "0 auto",
+      padding: "6px 32px",
     },
     ".cm-md-search-row": {
       display: "grid",
-      gridTemplateColumns: "34px minmax(180px, 1fr) 34px 34px 34px 34px",
-      gap: "6px",
+      gridTemplateColumns: "26px minmax(160px, 1fr) 26px 26px 26px 26px",
+      gap: "2px",
       alignItems: "center",
     },
     ".cm-md-search-input-wrap": {
       position: "relative",
       display: "block",
       minWidth: "0",
+      marginRight: "4px",
     },
     ".cm-md-search-input, .cm-md-replace-input": {
+      boxSizing: "border-box",
       width: "100%",
       minWidth: "0",
-      minHeight: "34px",
+      height: "28px",
       border: "1px solid var(--mp-ed-input-border)",
-      borderRadius: "7px",
-      padding: "4px 34px 4px 10px",
+      borderRadius: "4px",
+      padding: "0 28px 0 8px",
       backgroundColor: "var(--mp-ed-input-bg)",
       color: "var(--mp-ed-input-fg)",
       font: "inherit",
     },
     ".cm-md-search-input:focus, .cm-md-replace-input:focus": {
-      borderColor: "var(--mp-ed-focus-ring)",
+      borderColor: "var(--mp-accent)",
       outline: "none",
-      boxShadow: "0 0 0 3px var(--mp-accent-ring)",
     },
     ".cm-md-search-input-icon": {
       position: "absolute",
-      right: "10px",
+      right: "8px",
       top: "50%",
       transform: "translateY(-50%)",
       color: "var(--mp-ed-input-icon)",
       pointerEvents: "none",
     },
     ".cm-md-search-icon-button, .cm-md-search-command-button, .cm-md-search-toggle": {
-      minHeight: "34px",
-      border: "1px solid transparent",
-      borderRadius: "7px",
+      height: "26px",
+      border: "0",
+      borderRadius: "4px",
       backgroundColor: "var(--mp-ed-btn-bg)",
       color: "var(--mp-ed-btn-fg)",
       font: "inherit",
     },
     ".cm-md-search-icon-button": {
-      width: "34px",
+      width: "26px",
       padding: "0",
-      fontSize: "16px",
+      fontSize: "14px",
       lineHeight: "1",
     },
     ".cm-md-search-command-button": {
-      minWidth: "86px",
-      padding: "0 12px",
+      padding: "0 10px",
+      border: "1px solid var(--mp-ed-input-border)",
     },
-    ".cm-md-search-icon-button:hover, .cm-md-search-command-button:hover, .cm-md-search-toggle:hover, .cm-md-search-toggle.active": {
-      borderColor: "var(--mp-ed-btn-hover-border)",
+    ".cm-md-search-icon-button:hover, .cm-md-search-command-button:hover, .cm-md-search-toggle:hover": {
       backgroundColor: "var(--mp-ed-btn-hover-bg)",
+      color: "var(--mp-ed-panel-fg)",
+    },
+    ".cm-md-search-toggle.active": {
+      backgroundColor: "var(--mp-ed-btn-active-bg)",
+      color: "var(--mp-ed-btn-active-fg)",
     },
     ".cm-md-search-options": {
       display: "none",
-      gap: "6px",
-      paddingLeft: "40px",
+      gap: "2px",
+      paddingLeft: "28px",
     },
     ".cm-md-search-options.open": {
       display: "flex",
     },
     ".cm-md-search-toggle": {
-      minWidth: "42px",
-      padding: "0 8px",
+      minWidth: "34px",
+      padding: "0 6px",
       fontSize: "12px",
     },
     ".cm-md-replace-row": {
       display: "grid",
-      gridTemplateColumns: "minmax(180px, 1fr) auto auto",
-      gap: "8px",
-      paddingLeft: "40px",
+      gridTemplateColumns: "minmax(160px, 1fr) auto auto",
+      gap: "4px",
+      paddingLeft: "28px",
+      paddingRight: "108px",
     },
     ".cm-md-search-panel[data-mode='search'] .cm-md-replace-row": {
       display: "none",
     },
     "@media (max-width: 760px)": {
+      ".cm-content": {
+        paddingLeft: "16px",
+        paddingRight: "16px",
+      },
+      ".cm-md-search-panel": {
+        padding: "6px 12px",
+      },
       ".cm-md-search-row": {
-        gridTemplateColumns: "34px minmax(90px, 1fr) 34px 34px 34px 34px",
+        gridTemplateColumns: "26px minmax(90px, 1fr) 26px 26px 26px 26px",
       },
       ".cm-md-replace-row": {
-        gridTemplateColumns: "minmax(90px, 1fr)",
-      },
-      ".cm-md-search-command-button": {
-        width: "100%",
+        gridTemplateColumns: "minmax(90px, 1fr) auto auto",
+        paddingRight: "0",
       },
     },
   });
@@ -846,8 +904,6 @@ function MarkdownEditor({
       doc: value,
       selection: initialSelection,
       extensions: [
-        lineNumbers(),
-        highlightActiveLineGutter(),
         history(),
         indentOnInput(),
         syntaxHighlighting(markdownHighlightStyle, { fallback: true }),
@@ -863,6 +919,8 @@ function MarkdownEditor({
           },
         }),
         highlightSelectionMatches(),
+        // Kept for its .cm-activeLine marker (tests and tooling rely on it);
+        // the theme leaves it unpainted, as Obsidian does.
         highlightActiveLine(),
         scrollListener,
         markdownPadKeymap,

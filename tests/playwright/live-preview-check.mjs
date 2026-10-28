@@ -221,7 +221,8 @@ async function run() {
     assert.equal(metrics.codeBlockCount, 1);
     assert.equal(metrics.horizontalRuleCount, 1);
     assert.equal(metrics.taskCount, 1);
-    assert.equal(metrics.listMarkerCount, 3);
+    // Task items render only their checkbox, without a bullet in front.
+    assert.equal(metrics.listMarkerCount, 2);
     assert.ok(
       metrics.visibleLines.includes(
         "• 太字 と 強調 は記号を隠して読みやすく表示します",
@@ -914,7 +915,11 @@ async function run() {
     });
     assert.equal(noWrapMetrics.contentMaxWidth, "none");
     assert.equal(noWrapMetrics.lineWhiteSpace, "pre");
-    assert.ok(noWrapMetrics.activeWidth >= noWrapMetrics.lineScrollWidth);
+    // scrollWidth is rounded to an integer while the rect width is not.
+    assert.ok(
+      noWrapMetrics.activeWidth + 1 >= noWrapMetrics.lineScrollWidth,
+      JSON.stringify(noWrapMetrics),
+    );
 
     const shortcutPage = await browser.newPage({
       viewport: {
@@ -1245,7 +1250,7 @@ async function run() {
     );
     assert.deepEqual(listKeyResults.shiftEnterContinuation.slice(0, 3), [
       "• item",
-      "  a",
+      "a",
       "",
     ]);
 
@@ -1271,7 +1276,8 @@ async function run() {
 
     for (const result of listKeyResults.pastedContinuationResults) {
       assert.equal(result.lines[0], "• item");
-      assert.equal(result.lines[1], `  ${result.text}`);
+      // The source indentation is hidden; a hanging indent aligns the text.
+      assert.equal(result.lines[1], result.text);
       assert.equal(result.lines[2], "");
     }
 

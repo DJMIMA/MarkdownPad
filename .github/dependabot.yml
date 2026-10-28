@@ -1,0 +1,36 @@
+# Dependabot のバージョン更新設定。
+# 脆弱性アラートとセキュリティ更新 PR は、リポジトリの
+# Settings > Code security で有効にする（このファイルでは有効化できない）。
+version: 2
+updates:
+  # フロントエンド（React / Vite / CodeMirror / 印刷レンダラー）と Tauri CLI。
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    groups:
+      # minor / patch はまとめて 1 PR にする。major は個別 PR のまま残し、
+      # 破壊的変更を個別に確認できるようにする。
+      npm-production:
+        dependency-type: "production"
+        update-types: ["minor", "patch"]
+      npm-development:
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+
+  # Tauri / Rust 側。
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types: ["minor", "patch"]
