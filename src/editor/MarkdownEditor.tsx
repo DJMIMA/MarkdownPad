@@ -365,6 +365,9 @@ function editorTheme(zoom: number, wordWrap: boolean) {
       minHeight: "100%",
       margin: "0 auto",
       padding: "28px 32px 30vh",
+      // The editor uses the native caret (no drawSelection), whose color the
+      // CodeMirror base theme pins to black for non-dark themes. Follow the
+      // theme token instead so the caret stays visible in dark mode.
       caretColor: "var(--mp-ed-cursor)",
     },
     ".cm-line": {

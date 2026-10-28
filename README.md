@@ -190,7 +190,7 @@ Vite の初期 scaffold を含みます。
 
 予定している Tauri アプリを Windows で開発するには、次が必要です。
 
-- Node.js と npm。
+- Node.js 26 以上と npm。
 - Rust と Cargo。
 - Microsoft C++ Build Tools の Desktop development with C++ ワークロード。
 - Microsoft Edge WebView2 Runtime。多くの現代的な Windows 環境では既に
@@ -232,6 +232,17 @@ Rust/Tauri 側だけを確認します。
 cd src-tauri
 cargo check
 ```
+
+## 依存関係の更新
+
+`.github/dependabot.yml` で、npm（リポジトリ直下）と Cargo（`src-tauri`）
+の依存関係を毎週月曜に確認します。minor / patch 更新はエコシステムごとに
+1 つの PR へまとめ、major 更新は個別 PR として確認します。
+
+脆弱性アラートとセキュリティ更新 PR は、GitHub のリポジトリ設定
+（Settings > Code security）で Dependabot alerts と Dependabot security
+updates を有効にして使います。ローカルでは `npm audit` で同じ脆弱性
+データベースを確認できます。
 
 ## ネイティブアプリのビルド
 

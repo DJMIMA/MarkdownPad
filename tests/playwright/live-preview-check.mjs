@@ -1085,8 +1085,8 @@ async function run() {
     assert.equal(duringSearchHighlight.matchesInCode, 1);
 
     // Navigating to the table match marks it as the active (selected) match,
-    // still inside the rendered table.
-    await searchHighlightPage.locator(".cm-md-search-input").press("Enter");
+    // still inside the rendered table. The click above left the cursor at the
+    // end of the intro line, past its match, so the next match is the table's.
     await searchHighlightPage.locator(".cm-md-search-input").press("Enter");
     await waitForAnimationFrame(searchHighlightPage);
     const activeSearchHighlight = await snapshotSearchHighlight();
