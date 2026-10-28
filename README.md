@@ -173,7 +173,7 @@ Vite の初期 scaffold を含みます。
 
 予定している Tauri アプリを Windows で開発するには、次が必要です。
 
-- Node.js と npm。
+- Node.js 26 以上と npm。
 - Rust と Cargo。
 - Microsoft C++ Build Tools の Desktop development with C++ ワークロード。
 - Microsoft Edge WebView2 Runtime。多くの現代的な Windows 環境では既に
