@@ -91,6 +91,30 @@ export function listMarkerLabel(marker: string): string {
   return "•";
 }
 
+// Width (in em) reserved for a rendered list marker. Bullets and checkboxes
+// get a fixed slot; ordered markers grow with their digit count so "10." does
+// not collide with the text after it.
+export function listMarkerWidthEm(marker: string, isTask: boolean): number {
+  if (isTask) {
+    return 1.5;
+  }
+
+  const trimmed = marker.trim();
+
+  if (/^\d+[.)]$/.test(trimmed)) {
+    return Math.max(1.5, Math.round((0.55 * trimmed.length + 0.6) * 100) / 100);
+  }
+
+  return 1.45;
+}
+
+const inlineCodeDecoration = Decoration.mark({
+  class: "cm-md-inline-code",
+});
+const taskDoneDecoration = Decoration.mark({
+  class: "cm-md-task-done",
+});
+
 function headingLineDecoration(level: number) {
   const existing = headingLineDecorations.get(level);
 
@@ -1357,8 +1381,15 @@ class ListMarkerWidget extends WidgetType {
 
   toDOM() {
     const marker = document.createElement("span");
-    marker.className = "cm-md-list-marker";
-    marker.textContent = `${listMarkerLabel(this.marker)} `;
+    const label = listMarkerLabel(this.marker);
+
+    // The bullet glyph stays in the text (for copy and accessibility tools)
+    // but is drawn as a CSS dot so its size does not depend on the font.
+    marker.className = label === "•"
+      ? "cm-md-list-marker bullet"
+      : "cm-md-list-marker";
+    marker.textContent = `${label} `;
+
     marker.setAttribute("aria-hidden", "true");
     return marker;
   }
@@ -1978,6 +2009,183 @@ function imageParts(markdown: string) {
   };
 }
 
+function listLineDecoration(className: string, indentEm: number, markerEm: number) {
+  return Decoration.line({
+    class: className,
+    attributes: {
+      style: `--mp-list-indent: ${indentEm}em; --mp-list-marker: ${markerEm}em`,
+    },
+  });
+}
+
+function leadingWhitespaceEnd(state: EditorState, from: number, to: number) {
+  const text = state.doc.sliceString(from, to);
+  const match = /^[ \t]*/.exec(text);
+
+  return from + (match ? match[0].length : 0);
+}
+
+// Rough rendered width of source indentation, used to keep a list line that
+// is showing its Markdown source close to where its rendered form sits.
+function indentationWidthEm(text: string) {
+  let columns = 0;
+
+  for (const character of text) {
+    columns += character === "\t" ? 4 : 1;
+  }
+
+  return columns * 0.27;
+}
+
+function sourceListLineDecoration(
+  className: string,
+  targetStartEm: number,
+  contentStartEm: number,
+  indentText: string,
+) {
+  const firstLineStart = Math.max(
+    0,
+    Math.round((targetStartEm - indentationWidthEm(indentText)) * 100) / 100,
+  );
+
+  return listLineDecoration(
+    className,
+    contentStartEm,
+    Math.round((contentStartEm - firstLineStart) * 100) / 100,
+  );
+}
+
+// Lays out rendered list items with a hanging indent: the source indentation
+// is hidden and each line gets a left padding equal to where its text starts,
+// so wrapped lines and Shift+Enter continuation lines align with the first
+// line's text, and nested items sit under their parent's text (as in
+// Obsidian). Lines showing Markdown source are left untouched.
+function addListLayoutDecorations(
+  state: EditorState,
+  decorations: PreviewDecoration[],
+  sourceRanges: SourceRange[],
+) {
+  const contentStarts: number[] = [];
+
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (isStructuralBlock(node.name)) {
+        return false;
+      }
+
+      if (node.name !== "ListItem") {
+        return;
+      }
+
+      const item = node.node;
+      const mark = item.getChild("ListMark");
+      const task = item.getChild("Task");
+      const itemStart = contentStarts.length > 0
+        ? contentStarts[contentStarts.length - 1]
+        : 0;
+
+      if (!mark) {
+        contentStarts.push(itemStart);
+        return;
+      }
+
+      const markerEm = listMarkerWidthEm(
+        state.doc.sliceString(mark.from, mark.to),
+        Boolean(task),
+      );
+      const contentStart = Math.round((itemStart + markerEm) * 100) / 100;
+      contentStarts.push(contentStart);
+
+      const markerLine = state.doc.lineAt(mark.from);
+      const markerLineRange = { from: markerLine.from, to: markerLine.to };
+      const indentText = state.doc.sliceString(markerLine.from, mark.from);
+      const markerTokenEnd = task
+        ? task.getChild("TaskMarker")?.to ?? mark.to
+        : mark.to;
+
+      if (/^[ \t]*$/.test(indentText)) {
+        if (
+          !isRangeInSourceRange(markerLineRange, sourceRanges) &&
+          lineHasContentAfterToken(state, markerTokenEnd)
+        ) {
+          addDecoration(
+            decorations,
+            markerLine.from,
+            markerLine.from,
+            listLineDecoration("cm-md-list-line", contentStart, markerEm),
+          );
+
+          if (mark.from > markerLine.from) {
+            addDecoration(decorations, markerLine.from, mark.from, hiddenMarkDecoration);
+          }
+        } else {
+          addDecoration(
+            decorations,
+            markerLine.from,
+            markerLine.from,
+            sourceListLineDecoration(
+              "cm-md-list-line",
+              itemStart,
+              contentStart,
+              indentText,
+            ),
+          );
+        }
+      }
+
+      for (let child = item.firstChild; child; child = child.nextSibling) {
+        if (child.name !== "Paragraph" && child.name !== "Task") {
+          continue;
+        }
+
+        const firstLine = state.doc.lineAt(child.from).number;
+        const lastLine = state.doc.lineAt(child.to).number;
+
+        for (let number = firstLine; number <= lastLine; number += 1) {
+          const line = state.doc.line(number);
+
+          if (line.number === markerLine.number || line.text.trim().length === 0) {
+            continue;
+          }
+
+          const textStart = leadingWhitespaceEnd(state, line.from, line.to);
+
+          if (isRangeInSourceRange({ from: line.from, to: line.to }, sourceRanges)) {
+            addDecoration(
+              decorations,
+              line.from,
+              line.from,
+              sourceListLineDecoration(
+                "cm-md-list-line",
+                contentStart,
+                contentStart,
+                state.doc.sliceString(line.from, textStart),
+              ),
+            );
+            continue;
+          }
+
+          addDecoration(
+            decorations,
+            line.from,
+            line.from,
+            listLineDecoration("cm-md-list-continuation", contentStart, markerEm),
+          );
+
+          if (textStart > line.from) {
+            addDecoration(decorations, line.from, textStart, hiddenMarkDecoration);
+          }
+        }
+      }
+    },
+    leave(node) {
+      if (node.name === "ListItem") {
+        contentStarts.pop();
+      }
+    },
+  });
+}
+
 function buildLivePreviewDecorations(state: EditorState): DecorationSet {
   const decorations: PreviewDecoration[] = [];
   const sourceRanges = sourceRangesForSelection(state);
@@ -2009,8 +2217,14 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
     );
   }
 
+  addListLayoutDecorations(state, decorations, sourceRanges.all);
+
   tree.iterate({
     enter(node) {
+      if (node.name === "InlineCode") {
+        addDecoration(decorations, node.from, node.to, inlineCodeDecoration);
+      }
+
       const level = headingLevelForNode(node.name);
 
       if (level) {
@@ -2118,13 +2332,17 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         }
 
         const marker = state.doc.sliceString(node.from, node.to);
+        const isTaskItem = node.node.nextSibling?.name === "Task";
         addDecoration(
           decorations,
           node.from,
           tokenEndWithTrailingSpace(state, node.to),
-          Decoration.replace({
-            widget: new ListMarkerWidget(marker),
-          }),
+          // Task items show only the checkbox, not a bullet in front of it.
+          isTaskItem
+            ? hiddenMarkDecoration
+            : Decoration.replace({
+                widget: new ListMarkerWidget(marker),
+              }),
         );
         return;
       }
@@ -2135,14 +2353,23 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         }
 
         const marker = state.doc.sliceString(node.from, node.to);
+        const checked = /x/i.test(marker);
+        const textFrom = tokenEndWithTrailingSpace(state, node.to);
         addDecoration(
           decorations,
           node.from,
-          tokenEndWithTrailingSpace(state, node.to),
+          textFrom,
           Decoration.replace({
-            widget: new TaskMarkerWidget(/x/i.test(marker)),
+            widget: new TaskMarkerWidget(checked),
           }),
         );
+
+        const taskTo = node.node.parent?.to ?? node.to;
+
+        if (checked && taskTo > textFrom) {
+          addDecoration(decorations, textFrom, taskTo, taskDoneDecoration);
+        }
+
         return;
       }
 

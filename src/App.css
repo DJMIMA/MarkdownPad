@@ -5,118 +5,114 @@
    switch is a single attribute flip with no editor reconfiguration.
    ========================================================================== */
 
+/* Obsidian-like neutral palette: white paper / neutral grey dark mode, with a
+   single calm blue accent for links, focus, selection and checked tasks. */
 :root {
   color-scheme: light;
 
   /* Surfaces */
-  --mp-bg: #e6eaed;
-  --mp-chrome: #f4f7f8;
-  --mp-chrome-edge: #dbe3e6;
+  --mp-bg: #ffffff;
+  --mp-chrome: #f6f6f6;
+  --mp-chrome-edge: #e3e3e3;
   --mp-surface: #ffffff;
-  --mp-surface-muted: #eef3f4;
+  --mp-surface-muted: #f6f6f6;
   --mp-elevated: #ffffff;
 
   /* Text */
-  --mp-text: #1b2629;
-  --mp-text-secondary: #4a585c;
-  --mp-text-muted: #788589;
+  --mp-text: #222222;
+  --mp-text-secondary: #5c5c5c;
+  --mp-text-muted: #8a8a8a;
 
   /* Lines */
-  --mp-border: #d4dde0;
-  --mp-border-strong: #bccacd;
+  --mp-border: #e3e3e3;
+  --mp-border-strong: #cfcfcf;
 
-  /* Accent (brand teal) */
-  --mp-accent: #0d7a82;
-  --mp-accent-hover: #0a626a;
+  /* Accent */
+  --mp-accent: #2f6bd0;
+  --mp-accent-hover: #2358b3;
   --mp-accent-contrast: #ffffff;
-  --mp-accent-soft: #d6ecee;
-  --mp-accent-ring: rgb(13 122 130 / 38%);
+  --mp-accent-soft: #e9f0fb;
+  --mp-accent-ring: rgb(47 107 208 / 35%);
 
   /* States */
-  --mp-hover: #e7eef0;
-  --mp-active: #dce8ea;
-  --mp-focus-ring: rgb(13 122 130 / 45%);
+  --mp-hover: #ebebeb;
+  --mp-active: #e0e0e0;
+  --mp-focus-ring: rgb(47 107 208 / 45%);
 
   /* Shadows */
-  --mp-shadow-sm: 0 1px 2px rgb(20 38 44 / 8%);
-  --mp-shadow-md: 0 8px 24px rgb(20 38 44 / 12%);
-  --mp-shadow-lg: 0 20px 48px rgb(13 27 32 / 22%);
-  --mp-scrim: rgb(14 24 27 / 38%);
+  --mp-shadow-sm: 0 1px 2px rgb(0 0 0 / 6%);
+  --mp-shadow-md: 0 6px 18px rgb(0 0 0 / 12%);
+  --mp-shadow-lg: 0 16px 40px rgb(0 0 0 / 18%);
+  --mp-scrim: rgb(0 0 0 / 28%);
 
   /* ------------------------------------------------------------------ */
   /* Editor surface tokens                                              */
   /* ------------------------------------------------------------------ */
   --mp-ed-bg: #ffffff;
-  --mp-ed-fg: #232a2d;
-  --mp-ed-active-line: #eef6f7;
-  --mp-ed-active-line-outline: #d7e8ea;
-  --mp-ed-gutter-bg: #f3f6f6;
-  --mp-ed-gutter-border: #e2e8e9;
-  --mp-ed-gutter-fg: #95a0a3;
-  --mp-ed-gutter-active-fg: #44525a;
-  --mp-ed-selection: #bcdcff;
-  --mp-ed-selection-match: #cfe6ff;
-  --mp-ed-search-match: #ffe08a;
-  --mp-ed-search-match-active: #ffc24d;
-  --mp-ed-cursor: #0d7a82;
-  --mp-ed-cell-sel-bg: #cfe0ff;
+  --mp-ed-fg: #222222;
+  --mp-ed-syntax: #a3a3a3;
+  --mp-ed-selection: #cfe0fa;
+  --mp-ed-selection-match: #e6eefa;
+  --mp-ed-search-match: #ffe9a3;
+  --mp-ed-search-match-active: #ffcb52;
+  --mp-ed-cursor: #222222;
+  --mp-ed-cell-sel-bg: #dbe7fb;
   --mp-ed-cell-sel-ring: #6b94d6;
 
-  --mp-ed-heading: #123c4a;
-  --mp-ed-heading-muted: #355467;
-  --mp-ed-heading-rule: #dbe5e7;
+  --mp-ed-heading: #222222;
+  --mp-ed-heading-muted: #5c5c5c;
 
-  --mp-ed-link: #0b6ad0;
-  --mp-ed-link-hover: #074a9e;
+  --mp-ed-link: #2f6bd0;
+  --mp-ed-link-hover: #1d4f9f;
 
-  --mp-ed-inline-code-bg: #eceef0;
-  --mp-ed-inline-code-fg: #234;
+  --mp-ed-inline-code-bg: #f2f2f2;
+  --mp-ed-inline-code-fg: #2b2b2b;
 
-  --mp-ed-list-marker: #0d7a82;
+  --mp-ed-list-marker: #8a8a8a;
+  --mp-ed-list-guide: #e6e6e6;
 
-  --mp-ed-task-border: #6f8588;
-  --mp-ed-task-bg: #ffffff;
-  --mp-ed-task-checked-border: #0d7a82;
-  --mp-ed-task-checked-bg: #d6ecee;
-  --mp-ed-task-check: #0a5e63;
+  --mp-ed-task-border: #9e9e9e;
+  --mp-ed-task-checked-bg: #2f6bd0;
+  --mp-ed-task-check: #ffffff;
+  --mp-ed-task-done-fg: #8a8a8a;
 
-  --mp-ed-quote-border: #7fb0b3;
-  --mp-ed-quote-fg: #50636a;
-  --mp-ed-quote-bg: #f0f5f5;
+  --mp-ed-quote-border: #2f6bd0;
+  --mp-ed-quote-fg: #3d3d3d;
 
-  --mp-ed-code-bg: #f3f5f6;
-  --mp-ed-code-border: #e0e6e7;
-  --mp-ed-code-lang: #7c8789;
+  --mp-ed-code-bg: #f6f6f6;
+  --mp-ed-code-lang: #8a8a8a;
 
-  --mp-ed-table-border: #d8dfe0;
-  --mp-ed-th-bg: #eef3f3;
-  --mp-ed-th-fg: #28393d;
+  --mp-ed-table-border: #dedede;
+  --mp-ed-th-bg: #f6f6f6;
+  --mp-ed-th-fg: #222222;
 
-  --mp-ed-hr: #c6d4d7;
-  --mp-ed-img-border: #dde3e4;
-  --mp-ed-caption: #6a767a;
+  --mp-ed-hr: #d6d6d6;
+  --mp-ed-img-border: #e3e3e3;
+  --mp-ed-caption: #8a8a8a;
 
-  --mp-ed-focus-ring: #4fa4ad;
+  --mp-ed-focus-ring: rgb(47 107 208 / 55%);
 
-  --mp-ed-panel-bg: #eef3f4;
-  --mp-ed-panel-fg: #28333a;
-  --mp-ed-panel-border: #d3dcde;
+  --mp-ed-panel-bg: #f6f6f6;
+  --mp-ed-panel-fg: #222222;
+  --mp-ed-panel-border: #e3e3e3;
   --mp-ed-input-bg: #ffffff;
-  --mp-ed-input-fg: #1b2629;
-  --mp-ed-input-border: #cdd8da;
-  --mp-ed-input-icon: #5e7074;
-  --mp-ed-btn-bg: #f1f5f5;
-  --mp-ed-btn-fg: #28333a;
-  --mp-ed-btn-hover-bg: #e3eded;
-  --mp-ed-btn-hover-border: #bdd0d2;
+  --mp-ed-input-fg: #222222;
+  --mp-ed-input-border: #d4d4d4;
+  --mp-ed-input-icon: #8a8a8a;
+  --mp-ed-btn-bg: transparent;
+  --mp-ed-btn-fg: #5c5c5c;
+  --mp-ed-btn-hover-bg: #e6e6e6;
+  --mp-ed-btn-active-bg: #dde7f8;
+  --mp-ed-btn-active-fg: #2358b3;
 
-  /* Markdown source syntax highlight (matches CodeMirror's default style) */
-  --mp-hl-meta: #404740;
+  /* Markdown source syntax highlight. Formatting tokens (URLs, `---`) stay
+     muted like Obsidian; the rest matches CodeMirror's default style. */
+  --mp-hl-meta: #8a8a8a;
   --mp-hl-keyword: #770088;
-  --mp-hl-atom: #221199;
+  --mp-hl-atom: #8a8a8a;
   --mp-hl-literal: #116644;
   --mp-hl-string: #aa1111;
-  --mp-hl-escape: #ee4400;
+  --mp-hl-escape: #c2410c;
   --mp-hl-def: #0000ff;
   --mp-hl-local: #3300aa;
   --mp-hl-type: #008855;
@@ -128,7 +124,8 @@
 
   color: var(--mp-text);
   background: var(--mp-bg);
-  font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI",
+    "Hiragino Sans", "Meiryo", system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -138,104 +135,97 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --mp-bg: #0f1418;
-  --mp-chrome: #171d22;
-  --mp-chrome-edge: #050708;
-  --mp-surface: #1a2127;
-  --mp-surface-muted: #20272d;
-  --mp-elevated: #222b31;
+  --mp-bg: #1e1e1e;
+  --mp-chrome: #262626;
+  --mp-chrome-edge: #333333;
+  --mp-surface: #1e1e1e;
+  --mp-surface-muted: #262626;
+  --mp-elevated: #2b2b2b;
 
-  --mp-text: #e5eaec;
-  --mp-text-secondary: #a9b6bb;
-  --mp-text-muted: #76858b;
+  --mp-text: #dadada;
+  --mp-text-secondary: #b3b3b3;
+  --mp-text-muted: #8c8c8c;
 
-  --mp-border: #2a333a;
-  --mp-border-strong: #3a454d;
+  --mp-border: #363636;
+  --mp-border-strong: #474747;
 
-  --mp-accent: #2bb6c0;
-  --mp-accent-hover: #4cccd5;
-  --mp-accent-contrast: #04282b;
-  --mp-accent-soft: #163a3e;
-  --mp-accent-ring: rgb(43 182 192 / 45%);
+  --mp-accent: #3d74d6;
+  --mp-accent-hover: #4f84e3;
+  --mp-accent-contrast: #ffffff;
+  --mp-accent-soft: #263349;
+  --mp-accent-ring: rgb(110 160 240 / 45%);
 
-  --mp-hover: #232c33;
-  --mp-active: #2a353c;
-  --mp-focus-ring: rgb(43 182 192 / 55%);
+  --mp-hover: #303030;
+  --mp-active: #383838;
+  --mp-focus-ring: rgb(110 160 240 / 55%);
 
-  --mp-shadow-sm: 0 1px 2px rgb(0 0 0 / 35%);
-  --mp-shadow-md: 0 10px 28px rgb(0 0 0 / 45%);
-  --mp-shadow-lg: 0 24px 56px rgb(0 0 0 / 60%);
-  --mp-scrim: rgb(3 6 8 / 60%);
+  --mp-shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
+  --mp-shadow-md: 0 8px 22px rgb(0 0 0 / 45%);
+  --mp-shadow-lg: 0 18px 44px rgb(0 0 0 / 55%);
+  --mp-scrim: rgb(0 0 0 / 55%);
 
   /* Editor */
-  --mp-ed-bg: #11171b;
-  --mp-ed-fg: #d7dee1;
-  --mp-ed-active-line: #1b242a;
-  --mp-ed-active-line-outline: #25323a;
-  --mp-ed-gutter-bg: #141b1f;
-  --mp-ed-gutter-border: #232c32;
-  --mp-ed-gutter-fg: #5a676d;
-  --mp-ed-gutter-active-fg: #b6c1c6;
-  --mp-ed-selection: #2a4d6e;
-  --mp-ed-selection-match: #2c466b;
-  --mp-ed-search-match: #6b5a23;
-  --mp-ed-search-match-active: #8f7320;
-  --mp-ed-cursor: #46c8d1;
-  --mp-ed-cell-sel-bg: #29415c;
+  --mp-ed-bg: #1e1e1e;
+  --mp-ed-fg: #dadada;
+  --mp-ed-syntax: #7d7d7d;
+  --mp-ed-selection: #2f4266;
+  --mp-ed-selection-match: #2a3345;
+  --mp-ed-search-match: #5e4c14;
+  --mp-ed-search-match-active: #8c6c0f;
+  --mp-ed-cursor: #dadada;
+  --mp-ed-cell-sel-bg: #2a3d5c;
   --mp-ed-cell-sel-ring: #5e8fce;
 
-  --mp-ed-heading: #8fd6dd;
-  --mp-ed-heading-muted: #7fa7b5;
-  --mp-ed-heading-rule: #283238;
+  --mp-ed-heading: #dadada;
+  --mp-ed-heading-muted: #b3b3b3;
 
-  --mp-ed-link: #5ab0ff;
-  --mp-ed-link-hover: #8ccaff;
+  --mp-ed-link: #7aa8f5;
+  --mp-ed-link-hover: #a5c5fa;
 
-  --mp-ed-inline-code-bg: #262f35;
-  --mp-ed-inline-code-fg: #e3eaec;
+  --mp-ed-inline-code-bg: #2c2c2c;
+  --mp-ed-inline-code-fg: #dadada;
 
-  --mp-ed-list-marker: #3bbfc8;
+  --mp-ed-list-marker: #8c8c8c;
+  --mp-ed-list-guide: #333333;
 
-  --mp-ed-task-border: #5c6b70;
-  --mp-ed-task-bg: #1a2127;
-  --mp-ed-task-checked-border: #2bb6c0;
-  --mp-ed-task-checked-bg: #173b3f;
-  --mp-ed-task-check: #5ad3db;
+  --mp-ed-task-border: #8c8c8c;
+  --mp-ed-task-checked-bg: #3d74d6;
+  --mp-ed-task-check: #ffffff;
+  --mp-ed-task-done-fg: #8c8c8c;
 
-  --mp-ed-quote-border: #3f7a80;
-  --mp-ed-quote-fg: #9fb1b6;
-  --mp-ed-quote-bg: #18211f;
+  --mp-ed-quote-border: #5b8be0;
+  --mp-ed-quote-fg: #c8c8c8;
 
-  --mp-ed-code-bg: #171f24;
-  --mp-ed-code-border: #28323a;
-  --mp-ed-code-lang: #6f7e84;
+  --mp-ed-code-bg: #262626;
+  --mp-ed-code-lang: #8c8c8c;
 
-  --mp-ed-table-border: #2c373e;
-  --mp-ed-th-bg: #1d262c;
-  --mp-ed-th-fg: #cdd8db;
+  --mp-ed-table-border: #3a3a3a;
+  --mp-ed-th-bg: #262626;
+  --mp-ed-th-fg: #dadada;
 
-  --mp-ed-hr: #5e666c;
-  --mp-ed-img-border: #2a343b;
-  --mp-ed-caption: #7e8c91;
+  --mp-ed-hr: #555555;
+  --mp-ed-img-border: #363636;
+  --mp-ed-caption: #8c8c8c;
 
-  --mp-ed-focus-ring: #2bb6c0;
+  --mp-ed-focus-ring: rgb(110 160 240 / 60%);
 
-  --mp-ed-panel-bg: #171e23;
-  --mp-ed-panel-fg: #cbd6da;
-  --mp-ed-panel-border: #2a333a;
-  --mp-ed-input-bg: #10161a;
-  --mp-ed-input-fg: #e5eaec;
-  --mp-ed-input-border: #313b42;
-  --mp-ed-input-icon: #80909a;
-  --mp-ed-btn-bg: #212a30;
-  --mp-ed-btn-fg: #cbd6da;
-  --mp-ed-btn-hover-bg: #2a353c;
-  --mp-ed-btn-hover-border: #3c4951;
+  --mp-ed-panel-bg: #262626;
+  --mp-ed-panel-fg: #dadada;
+  --mp-ed-panel-border: #333333;
+  --mp-ed-input-bg: #1e1e1e;
+  --mp-ed-input-fg: #dadada;
+  --mp-ed-input-border: #3d3d3d;
+  --mp-ed-input-icon: #8c8c8c;
+  --mp-ed-btn-bg: transparent;
+  --mp-ed-btn-fg: #b3b3b3;
+  --mp-ed-btn-hover-bg: #333333;
+  --mp-ed-btn-active-bg: #263349;
+  --mp-ed-btn-active-fg: #a5c5fa;
 
   /* Markdown source syntax highlight — brightened for the dark background */
-  --mp-hl-meta: #97a39d;
+  --mp-hl-meta: #8c8c8c;
   --mp-hl-keyword: #d291ff;
-  --mp-hl-atom: #8fb6ff;
+  --mp-hl-atom: #8c8c8c;
   --mp-hl-literal: #74d6a0;
   --mp-hl-string: #ff9d8c;
   --mp-hl-escape: #ffb06a;
@@ -304,6 +294,8 @@ body.print-route .print-missing h1 {
 
 /* ==========================================================================
    App shell
+   The editor fills the window edge to edge (no card, no gutter) and the tab
+   bar sits on a slightly darker strip, the way Obsidian frames a note.
    ========================================================================== */
 
 .app-shell {
@@ -316,15 +308,29 @@ body.print-route .print-missing h1 {
 }
 
 .top-bar {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: end;
-  gap: 12px;
-  min-height: 46px;
-  padding: 7px 12px 0;
-  border-bottom: 1px solid var(--mp-chrome-edge);
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 8px 0;
   background: var(--mp-chrome);
-  transition: background-color 140ms ease, border-color 140ms ease;
+  transition: background-color 140ms ease;
+}
+
+/* Bottom divider drawn as a pseudo-element so the active tab can cover it and
+   join the editor surface seamlessly. */
+.top-bar::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background: var(--mp-chrome-edge);
+  pointer-events: none;
 }
 
 /* ---- Fallback application menu (browser / dev only) -------------------- */
@@ -333,8 +339,9 @@ body.print-route .print-missing h1 {
   display: flex;
   align-self: stretch;
   align-items: center;
-  gap: 2px;
+  gap: 0;
   min-width: max-content;
+  padding-bottom: 6px;
 }
 
 .menu-root {
@@ -342,12 +349,13 @@ body.print-route .print-missing h1 {
 }
 
 .menu-root-button {
-  min-height: 30px;
-  padding: 0 11px;
-  border: 1px solid transparent;
-  border-radius: 7px;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 4px;
   background: transparent;
   color: var(--mp-text-secondary);
+  font-size: 13px;
   transition: background-color 120ms ease, color 120ms ease;
 }
 
@@ -360,40 +368,42 @@ body.print-route .print-missing h1 {
 .menu-popover {
   position: absolute;
   z-index: 20;
-  top: 36px;
+  top: 30px;
   left: 0;
-  min-width: 276px;
-  padding: 6px;
+  min-width: 280px;
+  padding: 4px;
   border: 1px solid var(--mp-border);
-  border-radius: 10px;
+  border-radius: 6px;
   background: var(--mp-elevated);
   box-shadow: var(--mp-shadow-md);
 }
 
 .menu-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 24px;
+  grid-template-columns: minmax(0, 1fr) auto 20px;
   align-items: center;
   column-gap: 16px;
   width: 100%;
-  min-height: 32px;
-  padding: 0 10px;
+  min-height: 28px;
+  padding: 0 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--mp-text);
+  font-size: 13px;
   text-align: left;
+  white-space: nowrap;
 }
 
 .menu-item:hover {
-  background: var(--mp-accent-soft);
+  background: var(--mp-hover);
 }
 
 .menu-item.separator-before {
-  margin-top: 6px;
-  padding-top: 7px;
+  margin-top: 4px;
+  padding-top: 5px;
   border-top: 1px solid var(--mp-border);
-  border-radius: 0 0 6px 6px;
+  border-radius: 0 0 4px 4px;
 }
 
 .menu-shortcut {
@@ -404,8 +414,7 @@ body.print-route .print-missing h1 {
 }
 
 .menu-check {
-  color: var(--mp-accent);
-  font-weight: 700;
+  color: var(--mp-text);
   text-align: center;
 }
 
@@ -416,31 +425,48 @@ body.print-route .print-missing h1 {
   align-items: end;
   min-width: 0;
   overflow-x: auto;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 
 .tab-button,
 .new-tab-button {
-  min-height: 35px;
-  border: 1px solid transparent;
+  min-height: 32px;
+  border: 0;
   background: transparent;
-  color: var(--mp-text-secondary);
-  transition: background-color 120ms ease, color 120ms ease,
-    border-color 120ms ease;
+  color: var(--mp-text-muted);
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
 .tab-button {
   position: relative;
+  z-index: 1;
   display: inline-grid;
-  grid-template-columns: minmax(64px, 180px) 22px;
+  grid-template-columns: minmax(48px, 1fr) 20px;
   align-items: center;
-  gap: 4px;
-  min-width: 128px;
-  max-width: 234px;
+  gap: 6px;
+  flex: 0 1 200px;
+  min-width: 96px;
+  max-width: 220px;
   padding: 0 6px 0 12px;
-  border-bottom: 0;
-  border-radius: 9px 9px 0 0;
-  color: var(--mp-text-muted);
+  border-radius: 6px 6px 0 0;
+}
+
+/* Thin separators between inactive tabs, hidden next to the active one. */
+.tab-button + .tab-button::before {
+  content: "";
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 0;
+  width: 1px;
+  background: var(--mp-border-strong);
+}
+
+.tab-button.active::before,
+.tab-button.active + .tab-button::before,
+.tab-button:hover::before,
+.tab-button:hover + .tab-button::before {
+  display: none;
 }
 
 .tab-button:hover {
@@ -448,15 +474,10 @@ body.print-route .print-missing h1 {
   color: var(--mp-text-secondary);
 }
 
-.tab-button + .tab-button {
-  margin-left: 2px;
-}
-
 .tab-button.active {
-  background: var(--mp-surface);
+  z-index: 2;
+  background: var(--mp-bg);
   color: var(--mp-text);
-  border-color: var(--mp-border);
-  box-shadow: 0 -1px 0 var(--mp-accent) inset;
 }
 
 .tab-title {
@@ -468,15 +489,24 @@ body.print-route .print-missing h1 {
 }
 
 .close-tab {
+  position: relative;
   display: grid;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   place-items: center;
-  border-radius: 6px;
+  border-radius: 4px;
   color: var(--mp-text-muted);
   font-size: 15px;
   line-height: 1;
-  transition: background-color 120ms ease, color 120ms ease;
+  opacity: 0;
+  transition: background-color 120ms ease, color 120ms ease,
+    opacity 120ms ease;
+}
+
+.tab-button.active .close-tab,
+.tab-button:hover .close-tab,
+.close-tab:focus-visible {
+  opacity: 1;
 }
 
 .close-tab:hover {
@@ -484,12 +514,42 @@ body.print-route .print-missing h1 {
   color: var(--mp-text);
 }
 
+/* Unsaved tabs show a dot in the close slot; hovering reveals the close
+   button again. */
+.close-tab.is-dirty {
+  opacity: 1;
+  color: transparent;
+}
+
+.close-tab.is-dirty::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mp-text-secondary);
+  transform: translate(-50%, -50%);
+}
+
+.close-tab.is-dirty:hover,
+.close-tab.is-dirty:focus-visible {
+  color: var(--mp-text);
+}
+
+.close-tab.is-dirty:hover::after,
+.close-tab.is-dirty:focus-visible::after {
+  display: none;
+}
+
 .new-tab-button {
-  width: 34px;
-  margin-left: 4px;
-  border-radius: 8px;
-  color: var(--mp-text-muted);
-  font-size: 19px;
+  flex: none;
+  width: 28px;
+  min-height: 26px;
+  margin: 0 0 3px 4px;
+  border-radius: 4px;
+  font-size: 18px;
   line-height: 1;
 }
 
@@ -504,26 +564,25 @@ body.print-route .print-missing h1 {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
-  min-width: 58px;
-  min-height: 35px;
-  padding-bottom: 6px;
-  color: var(--mp-text-secondary);
+  gap: 4px;
+  min-width: 52px;
+  min-height: 32px;
+  padding-bottom: 4px;
+  color: var(--mp-text-muted);
   font-size: 12px;
 }
 
 .theme-toggle {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   padding: 0;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  border: 0;
+  border-radius: 4px;
   background: transparent;
-  color: var(--mp-text-secondary);
-  transition: background-color 120ms ease, color 120ms ease,
-    border-color 120ms ease;
+  color: var(--mp-text-muted);
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
 .theme-toggle:hover {
@@ -532,18 +591,17 @@ body.print-route .print-missing h1 {
 }
 
 .theme-toggle:focus-visible {
-  outline: none;
-  border-color: var(--mp-accent);
-  box-shadow: 0 0 0 3px var(--mp-accent-ring);
+  outline: 2px solid var(--mp-focus-ring);
+  outline-offset: 0;
 }
 
 .theme-toggle svg {
-  width: 17px;
-  height: 17px;
+  width: 15px;
+  height: 15px;
 }
 
 .zoom-indicator {
-  min-width: 38px;
+  min-width: 36px;
   padding-right: 2px;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -552,12 +610,14 @@ body.print-route .print-missing h1 {
 
 /* ---- Workspace + editor host ------------------------------------------ */
 
+/* Isolate the editor so CodeMirror's own z-indexed layers (search panel)
+   never cover the fallback menu popovers in the top bar. */
 .workspace {
+  isolation: isolate;
   display: flex;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 14px;
 }
 
 .editor-host {
@@ -565,11 +625,8 @@ body.print-route .print-missing h1 {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--mp-border);
-  border-radius: 12px;
   background: var(--mp-ed-bg);
-  box-shadow: var(--mp-shadow-sm);
-  transition: border-color 140ms ease, background-color 140ms ease;
+  transition: background-color 140ms ease;
 }
 
 .editor-host .cm-editor {
@@ -583,6 +640,7 @@ body.print-route .print-missing h1 {
 
 .editor-host .cm-scroller {
   overflow: auto;
+  scrollbar-color: var(--mp-border-strong) transparent;
 }
 
 /* ---- Floating table-cell action menu ---------------------------------- */
@@ -591,26 +649,27 @@ body.print-route .print-missing h1 {
   position: fixed;
   z-index: 1000;
   display: flex;
-  gap: 4px;
-  padding: 5px;
+  gap: 2px;
+  padding: 3px;
   border: 1px solid var(--mp-border);
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--mp-elevated);
   box-shadow: var(--mp-shadow-md);
 }
 
 .cm-md-table-selection-menu button {
-  min-height: 28px;
-  padding: 0 11px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
   background: transparent;
   color: var(--mp-text);
+  font-size: 13px;
 }
 
 .cm-md-table-selection-menu button:hover,
 .cm-md-table-selection-menu button:focus {
-  background: var(--mp-accent-soft);
+  background: var(--mp-hover);
   outline: none;
 }
 
@@ -626,14 +685,13 @@ body.print-route .print-missing h1 {
   place-items: center;
   padding: 20px;
   background: var(--mp-scrim);
-  backdrop-filter: blur(3px);
 }
 
 .unsaved-dialog {
-  width: min(400px, 100%);
+  width: min(420px, 100%);
   overflow: hidden;
   border: 1px solid var(--mp-border);
-  border-radius: 14px;
+  border-radius: 8px;
   background: var(--mp-elevated);
   box-shadow: var(--mp-shadow-lg);
   color: var(--mp-text);
@@ -641,14 +699,14 @@ body.print-route .print-missing h1 {
 
 .unsaved-dialog h2 {
   margin: 0;
-  padding: 22px 24px 8px;
-  font-size: 18px;
-  font-weight: 700;
+  padding: 18px 20px 6px;
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .unsaved-dialog p {
   margin: 0;
-  padding: 0 24px 22px;
+  padding: 0 20px 18px;
   color: var(--mp-text-secondary);
   font-size: 14px;
   line-height: 1.6;
@@ -656,21 +714,20 @@ body.print-route .print-missing h1 {
 
 .unsaved-dialog-actions {
   display: flex;
-  gap: 9px;
+  gap: 8px;
   justify-content: flex-end;
-  padding: 16px 22px 20px;
-  border-top: 1px solid var(--mp-border);
-  background: var(--mp-surface-muted);
+  padding: 0 20px 18px;
 }
 
 .unsaved-dialog-actions button {
-  min-width: 92px;
-  min-height: 36px;
-  padding: 0 16px;
+  min-width: 84px;
+  min-height: 30px;
+  padding: 0 14px;
   border: 1px solid var(--mp-border-strong);
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--mp-surface);
   color: var(--mp-text);
+  font-size: 13px;
   transition: background-color 120ms ease, border-color 120ms ease;
 }
 
@@ -679,24 +736,18 @@ body.print-route .print-missing h1 {
 }
 
 .unsaved-dialog-actions button:focus-visible {
-  outline: none;
-  border-color: var(--mp-accent);
-  box-shadow: 0 0 0 3px var(--mp-accent-ring);
+  outline: 2px solid var(--mp-focus-ring);
+  outline-offset: 1px;
 }
 
 .unsaved-dialog-actions button.primary {
   border-color: transparent;
   background: var(--mp-accent);
   color: var(--mp-accent-contrast);
-  font-weight: 600;
 }
 
 .unsaved-dialog-actions button.primary:hover {
   background: var(--mp-accent-hover);
-}
-
-.unsaved-dialog-actions button.primary:focus-visible {
-  box-shadow: 0 0 0 3px var(--mp-accent-ring);
 }
 
 /* ==========================================================================
@@ -705,20 +756,23 @@ body.print-route .print-missing h1 {
 
 .status-bar {
   display: flex;
-  min-height: 30px;
+  min-height: 24px;
   align-items: center;
-  gap: 18px;
+  justify-content: flex-end;
+  gap: 16px;
   overflow: hidden;
-  padding: 4px 14px;
-  border-top: 1px solid var(--mp-chrome-edge);
-  background: var(--mp-chrome);
+  padding: 2px 12px;
+  border-top: 1px solid var(--mp-border);
+  background: var(--mp-bg);
   color: var(--mp-text-muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   transition: background-color 140ms ease, border-color 140ms ease;
 }
 
 .status-bar span:first-child {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -745,9 +799,5 @@ body.print-route .print-missing h1 {
 
   .top-status {
     grid-column: 2 / 3;
-  }
-
-  .workspace {
-    padding: 8px;
   }
 }

@@ -21,10 +21,11 @@ const printStyles = `
 
   .markdown-print-document {
     margin: 48px auto;
-    max-width: 820px;
-    color: #202d30;
-    font-family: "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
-    line-height: 1.7;
+    max-width: 760px;
+    color: #222222;
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI",
+      "Hiragino Sans", "Meiryo", system-ui, sans-serif;
+    line-height: 1.6;
   }
 
   .markdown-print-document h1,
@@ -33,33 +34,42 @@ const printStyles = `
   .markdown-print-document h4,
   .markdown-print-document h5,
   .markdown-print-document h6 {
-    color: #12364f;
-    line-height: 1.25;
+    color: #222222;
+    line-height: 1.3;
   }
 
   .markdown-print-document h1 {
-    border-bottom: 1px solid #d9e2e4;
-    padding-bottom: 0.2em;
+    font-size: 1.8em;
   }
 
   .markdown-print-document code,
   .markdown-print-document pre {
-    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-family: "Cascadia Mono", "Consolas", "BIZ UDGothic", monospace;
+    font-size: 0.875em;
+  }
+
+  .markdown-print-document :not(pre) > code {
+    padding: 0.1em 0.25em;
+    border-radius: 3px;
+    background: #f2f2f2;
+  }
+
+  .markdown-print-document pre code {
+    font-size: 1em;
   }
 
   .markdown-print-document pre {
-    padding: 16px;
+    padding: 12px 16px;
     overflow: auto;
-    border: 1px solid #d9d4ca;
-    border-radius: 8px;
-    background: #f1f4f2;
+    border-radius: 4px;
+    background: #f6f6f6;
   }
 
   .markdown-print-document blockquote {
     margin-left: 0;
     padding-left: 1em;
-    border-left: 3px solid #8fb3b5;
-    color: #4a5e62;
+    border-left: 2px solid #2f6bd0;
+    color: #3d3d3d;
   }
 
   .markdown-print-document table {
@@ -70,17 +80,17 @@ const printStyles = `
 
   .markdown-print-document th,
   .markdown-print-document td {
-    border: 1px solid #d6ddd9;
-    padding: 7px 10px;
+    border: 1px solid #dedede;
+    padding: 5px 12px;
     text-align: left;
   }
 
   .markdown-print-document th {
-    background: #edf3f2;
+    background: #f6f6f6;
   }
 
   .markdown-print-document a {
-    color: #0a5da8;
+    color: #2f6bd0;
   }
 
   .markdown-print-document img {
