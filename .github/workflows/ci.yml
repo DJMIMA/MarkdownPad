@@ -1,0 +1,136 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: 22
+
+jobs:
+  frontend:
+    name: Frontend (unit tests + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Typecheck and build
+        run: npm run build
+
+  e2e:
+    name: Browser checks (Playwright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      # The checks launch the runner's preinstalled Google Chrome
+      # (channel: "chrome"). Install CJK fonts so the Japanese sample text
+      # lays out with real glyphs instead of fallback boxes.
+      - name: Install CJK fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
+
+      - name: Start Vite dev server
+        run: |
+          nohup npm run dev > vite.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:1420 > /dev/null; then
+              echo "Vite is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Vite did not start in time" >&2
+          cat vite.log >&2
+          exit 1
+
+      - name: Live preview check
+        run: npm run test:playwright
+
+      - name: Print check
+        run: npm run test:playwright:print
+
+      - name: Click caret check
+        run: node tests/playwright/click-caret-check.mjs
+
+      - name: Drag drift check
+        run: node tests/playwright/drag-drift-check.mjs
+
+      - name: Upload screenshots and dev server log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-output
+          path: |
+            output/playwright/
+            vite.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  tauri:
+    name: Tauri (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+
+      # tauri::generate_context! embeds frontendDist (../dist), so the
+      # frontend has to be built before any cargo command.
+      - name: Build frontend
+        run: npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - name: cargo fmt
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test --locked

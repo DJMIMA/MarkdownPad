@@ -216,6 +216,19 @@ cd src-tauri
 cargo check
 ```
 
+## CI
+
+GitHub Actions（`.github/workflows/ci.yml`）で、`main` への push と
+pull request ごとに次を実行します。
+
+- Frontend（Ubuntu）: `npm test` の unit test と、`npm run build` による
+  型チェックと production build。
+- Browser checks（Ubuntu）: Vite dev server を起動し、
+  `tests/playwright/` の 4 種類のブラウザ検査をランナー同梱の Google Chrome
+  で実行する。スクリーンショットは Actions の artifact に保存する。
+- Tauri（Windows）: フロントエンドを build した後、`src-tauri` で
+  `cargo fmt --check`、`cargo clippy -- -D warnings`、`cargo test` を実行する。
+
 ## ネイティブアプリのビルド
 
 Windows で直接起動できる release exe を作るには、リポジトリ直下で次を
