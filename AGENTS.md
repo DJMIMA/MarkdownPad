@@ -34,6 +34,9 @@ MarkdownPad は、単体の Markdown ファイルを軽く開き、美しく読�
   エディタ画面と印刷プレビューはルート単位でチャンク分割し、各ウィンドウ
   が必要なコードだけを読み込むようにする。WebView2 前提のため Vite の
   ビルドターゲットは `esnext`。
+- 対応 Node.js: 26 以上。`package.json` の `engines`（`>=26`）と
+  `.nvmrc`（`26`）で指定する。引き上げるときは両方と README を揃えて
+  更新する。
 
 Tauri 開発には Rust/Cargo が必要です。初期確認時点のローカル環境では
 Node.js と npm は利用可能で、Rust/Cargo は後から導入されました。

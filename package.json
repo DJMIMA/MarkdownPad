@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=26"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "test": "node --test tests/*.test.ts",
