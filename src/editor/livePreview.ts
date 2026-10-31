@@ -20,6 +20,8 @@ import {
   ViewPlugin,
 } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef } from "@lezer/common";
+// The explicit extension lets `node --test` load this module directly.
+import { isReadingMode, readingModeChangeGuard } from "./readingMode.ts";
 
 type SourceRange = {
   from: number;
@@ -142,6 +144,12 @@ function sourceRangesForSelection(state: EditorState): SourceRanges {
     all: [],
     structural: [],
   };
+
+  // Reading mode renders everything; no selection reveals Markdown source.
+  if (isReadingMode(state)) {
+    return ranges;
+  }
+
   const tree = syntaxTree(state);
 
   for (const selectionRange of state.selection.ranges) {
@@ -999,7 +1007,7 @@ function installLineSelectionDrag(
 
 const structuralSourceLineMouseDownHandler = EditorView.domEventHandlers({
   mousedown(event, view) {
-    if (event.button !== 0) {
+    if (event.button !== 0 || isReadingMode(view.state)) {
       return false;
     }
 
@@ -1040,7 +1048,9 @@ const structuralSourceLineMouseDownHandler = EditorView.domEventHandlers({
 
 const visualLineMouseDownHandler = EditorView.domEventHandlers({
   mousedown(event, view) {
-    if (event.button !== 0) {
+    // In reading mode there is no source line to reveal, so the browser's own
+    // text selection handles the mouse.
+    if (event.button !== 0 || isReadingMode(view.state)) {
       return false;
     }
 
@@ -1088,7 +1098,7 @@ const visualLineMouseDownHandler = EditorView.domEventHandlers({
 
 const visualLineClickHandler = EditorView.domEventHandlers({
   click(event, view) {
-    if (event.button !== 0) {
+    if (event.button !== 0 || isReadingMode(view.state)) {
       return false;
     }
 
@@ -1183,7 +1193,7 @@ const sourceLineNavigation = ViewPlugin.fromClass(
     private readonly handleCut = (event: ClipboardEvent) => {
       const selection = tableCellSelections.get(this.view);
 
-      if (!selection || !event.clipboardData) {
+      if (!selection || !event.clipboardData || isReadingMode(this.view.state)) {
         return;
       }
 
@@ -1217,7 +1227,8 @@ const sourceLineNavigation = ViewPlugin.fromClass(
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||
-        event.shiftKey
+        event.shiftKey ||
+        isReadingMode(this.view.state)
       ) {
         return;
       }
@@ -1442,12 +1453,14 @@ class CodeBlockWidget extends WidgetType {
   private readonly editAt: number;
   private readonly matches: SourceRange[];
   private readonly selected: SourceRange | null;
+  private readonly readOnly: boolean;
 
   constructor(
     markdown: string,
     editAt: number,
     matches: SourceRange[] = [],
     selected: SourceRange | null = null,
+    readOnly = false,
   ) {
     super();
     const parsed = parseCodeFence(markdown);
@@ -1456,11 +1469,13 @@ class CodeBlockWidget extends WidgetType {
     this.editAt = editAt;
     this.matches = matches;
     this.selected = selected;
+    this.readOnly = readOnly;
   }
 
   eq(widget: WidgetType) {
     return (
       widget instanceof CodeBlockWidget &&
+      widget.readOnly === this.readOnly &&
       widget.language === this.language &&
       widget.body === this.body &&
       widget.editAt === this.editAt &&
@@ -1527,20 +1542,25 @@ class CodeBlockWidget extends WidgetType {
   toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-code-block";
-    wrapper.tabIndex = 0;
-    wrapper.role = "button";
-    wrapper.ariaLabel = "コードブロックを Markdown ソースで編集";
-    wrapper.title = "クリックして Markdown ソースで編集";
 
-    const reveal = makeSourceRevealHandler(view, this.editAt);
-    wrapper.addEventListener("mousedown", (event) =>
-      this.handlePointerDown(event, view),
-    );
-    wrapper.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        reveal(event);
-      }
-    });
+    // In reading mode the block is plain rendered content: no edit affordance,
+    // and the mouse selects text natively.
+    if (!this.readOnly) {
+      wrapper.tabIndex = 0;
+      wrapper.role = "button";
+      wrapper.ariaLabel = "コードブロックを Markdown ソースで編集";
+      wrapper.title = "クリックして Markdown ソースで編集";
+
+      const reveal = makeSourceRevealHandler(view, this.editAt);
+      wrapper.addEventListener("mousedown", (event) =>
+        this.handlePointerDown(event, view),
+      );
+      wrapper.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          reveal(event);
+        }
+      });
+    }
 
     if (this.language) {
       const label = document.createElement("span");
@@ -1569,12 +1589,14 @@ class TableWidget extends WidgetType {
   private readonly editAt: number;
   private readonly matches: SourceRange[];
   private readonly selected: SourceRange | null;
+  private readonly readOnly: boolean;
 
   constructor(
     markdown: string,
     editAt: number,
     matches: SourceRange[] = [],
     selected: SourceRange | null = null,
+    readOnly = false,
   ) {
     super();
     const parsed = parseMarkdownTable(markdown);
@@ -1585,6 +1607,7 @@ class TableWidget extends WidgetType {
     this.editAt = editAt;
     this.matches = matches;
     this.selected = selected;
+    this.readOnly = readOnly;
   }
 
   get estimatedHeight() {
@@ -1596,6 +1619,7 @@ class TableWidget extends WidgetType {
   eq(widget: WidgetType) {
     return (
       widget instanceof TableWidget &&
+      widget.readOnly === this.readOnly &&
       JSON.stringify(widget.headers) === JSON.stringify(this.headers) &&
       JSON.stringify(widget.rows) === JSON.stringify(this.rows) &&
       JSON.stringify(widget.headerCells) === JSON.stringify(this.headerCells) &&
@@ -1883,22 +1907,27 @@ class TableWidget extends WidgetType {
   toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-table-wrapper";
-    wrapper.tabIndex = 0;
-    wrapper.role = "button";
-    wrapper.ariaLabel = "表を Markdown ソースで編集";
-    wrapper.title = "クリックして Markdown ソースで編集";
 
-    wrapper.addEventListener("mousedown", (event) =>
-      this.handleTablePointerDown(event, view, wrapper),
-    );
-    wrapper.addEventListener("contextmenu", (event) =>
-      this.handleTableContextMenu(event, view, wrapper),
-    );
-    wrapper.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        makeSourceRevealHandler(view, this.editAt)(event);
-      }
-    });
+    // In reading mode the table stays rendered: clicks select cell text
+    // natively instead of revealing the source or starting a cell selection.
+    if (!this.readOnly) {
+      wrapper.tabIndex = 0;
+      wrapper.role = "button";
+      wrapper.ariaLabel = "表を Markdown ソースで編集";
+      wrapper.title = "クリックして Markdown ソースで編集";
+
+      wrapper.addEventListener("mousedown", (event) =>
+        this.handleTablePointerDown(event, view, wrapper),
+      );
+      wrapper.addEventListener("contextmenu", (event) =>
+        this.handleTableContextMenu(event, view, wrapper),
+      );
+      wrapper.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          makeSourceRevealHandler(view, this.editAt)(event);
+        }
+      });
+    }
 
     const table = document.createElement("table");
     const thead = document.createElement("thead");
@@ -1949,16 +1978,19 @@ class TableWidget extends WidgetType {
 class HorizontalRuleWidget extends WidgetType {
   private readonly marker: string;
   private readonly editAt: number;
+  private readonly readOnly: boolean;
 
-  constructor(marker: string, editAt: number) {
+  constructor(marker: string, editAt: number, readOnly = false) {
     super();
     this.marker = marker;
     this.editAt = editAt;
+    this.readOnly = readOnly;
   }
 
   eq(widget: WidgetType) {
     return (
       widget instanceof HorizontalRuleWidget &&
+      widget.readOnly === this.readOnly &&
       widget.marker === this.marker &&
       widget.editAt === this.editAt
     );
@@ -1971,18 +2003,21 @@ class HorizontalRuleWidget extends WidgetType {
   toDOM(view: EditorView) {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-horizontal-rule";
-    wrapper.tabIndex = 0;
-    wrapper.role = "button";
-    wrapper.ariaLabel = "罫線を Markdown ソースで編集";
-    wrapper.title = "クリックして Markdown ソースで編集";
 
-    const reveal = makeSourceRevealHandler(view, this.editAt);
-    wrapper.addEventListener("mousedown", reveal);
-    wrapper.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        reveal(event);
-      }
-    });
+    if (!this.readOnly) {
+      wrapper.tabIndex = 0;
+      wrapper.role = "button";
+      wrapper.ariaLabel = "罫線を Markdown ソースで編集";
+      wrapper.title = "クリックして Markdown ソースで編集";
+
+      const reveal = makeSourceRevealHandler(view, this.editAt);
+      wrapper.addEventListener("mousedown", reveal);
+      wrapper.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          reveal(event);
+        }
+      });
+    }
 
     const rule = document.createElement("hr");
     wrapper.append(rule);
@@ -2220,6 +2255,7 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
   const sourceRanges = sourceRangesForSelection(state);
   const searchMatches = activeSearchMatches(state);
   const mainSelection = state.selection.main;
+  const readOnly = isReadingMode(state);
 
   for (const range of horizontalRuleMatchRanges(state, searchMatches)) {
     sourceRanges.all.push(range);
@@ -2315,11 +2351,23 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         let widget: WidgetType;
 
         if (node.name === "FencedCode") {
-          widget = new CodeBlockWidget(text, editAt, blockMatches, blockSelected);
+          widget = new CodeBlockWidget(
+            text,
+            editAt,
+            blockMatches,
+            blockSelected,
+            readOnly,
+          );
         } else if (node.name === "Table") {
-          widget = new TableWidget(text, editAt, blockMatches, blockSelected);
+          widget = new TableWidget(
+            text,
+            editAt,
+            blockMatches,
+            blockSelected,
+            readOnly,
+          );
         } else {
-          widget = new HorizontalRuleWidget(text, editAt);
+          widget = new HorizontalRuleWidget(text, editAt, readOnly);
         }
 
         addDecoration(
@@ -2478,7 +2526,8 @@ const livePreviewField = StateField.define<DecorationSet>({
       transaction.docChanged ||
       transaction.selection ||
       transaction.effects.some((effect) => effect.is(setSearchQuery)) ||
-      searchPanelOpen(transaction.startState) !== searchPanelOpen(transaction.state)
+      searchPanelOpen(transaction.startState) !== searchPanelOpen(transaction.state) ||
+      isReadingMode(transaction.startState) !== isReadingMode(transaction.state)
     ) {
       return buildLivePreviewDecorations(transaction.state);
     }
@@ -2492,6 +2541,7 @@ const livePreviewField = StateField.define<DecorationSet>({
 
 export const livePreview = [
   livePreviewField,
+  readingModeChangeGuard,
   sourceLineNavigation,
   structuralSourceLineMouseDownHandler,
   visualLineMouseDownHandler,

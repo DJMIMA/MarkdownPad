@@ -17,7 +17,14 @@ export interface MenuGroup {
 
 export type ShortcutCommand = MenuAction | "find-next" | "find-previous";
 
-export function menuGroups(settings: EditorSettings): MenuGroup[] {
+export interface ViewState {
+  readingMode: boolean;
+}
+
+export function menuGroups(
+  settings: EditorSettings,
+  view: ViewState = { readingMode: false },
+): MenuGroup[] {
   return [
     {
       id: "file",
@@ -91,10 +98,16 @@ export function menuGroups(settings: EditorSettings): MenuGroup[] {
         { action: "zoom-out", label: "縮小", shortcut: "Ctrl+-" },
         { action: "zoom-reset", label: "既定値に戻す", shortcut: "Ctrl+0" },
         {
+          action: "toggle-reading-mode",
+          label: "リーディングモード",
+          shortcut: "Ctrl+E",
+          checked: view.readingMode,
+          separatorBefore: true,
+        },
+        {
           action: "toggle-word-wrap",
           label: "右端で折り返す",
           checked: settings.wordWrap,
-          separatorBefore: true,
         },
         {
           action: "toggle-status-bar",
@@ -140,6 +153,8 @@ export function shortcutCommandFromEvent(
       return event.shiftKey ? null : "find";
     case "h":
       return event.shiftKey ? null : "replace";
+    case "e":
+      return event.shiftKey ? null : "toggle-reading-mode";
     case "+":
     case "=":
       return "zoom-in";

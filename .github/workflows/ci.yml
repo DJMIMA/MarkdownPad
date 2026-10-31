@@ -80,6 +80,9 @@ jobs:
       - name: Drag drift check
         run: node tests/playwright/drag-drift-check.mjs
 
+      - name: Reading mode check
+        run: node tests/playwright/reading-mode-check.mjs
+
       - name: Upload screenshots and dev server log
         if: always()
         uses: actions/upload-artifact@v7

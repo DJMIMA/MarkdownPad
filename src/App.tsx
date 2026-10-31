@@ -19,6 +19,8 @@ import {
   openApplicationWindow,
   closeCurrentWindow,
   listenToCloseRequested,
+  listenToWindowFocus,
+  syncNativeViewMenu,
   listenToOpenFilesRequested,
   takePendingOpenFiles,
 } from "./platform";
@@ -103,6 +105,12 @@ function App() {
   const [settings, setSettings] = useState<EditorSettings>(
     defaultEditorSettings,
   );
+  // Reading mode is a per-tab view state. It is kept beside the tabs rather
+  // than in DocumentTab or EditorSettings, so the recovery snapshot keeps its
+  // shape (and a restored session opens in editing mode).
+  const [readingTabIds, setReadingTabIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [unsavedDialog, setUnsavedDialog] =
@@ -112,8 +120,12 @@ function App() {
   const { resolvedTheme, toggleTheme } = useTheme();
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
+  const readingMode = readingTabIds.has(activeTab.id);
   const nextUntitledIndex = tabs.filter((tab) => tab.isUntitled).length + 1;
-  const groups = useMemo(() => menuGroups(settings), [settings]);
+  const groups = useMemo(
+    () => menuGroups(settings, { readingMode }),
+    [readingMode, settings],
+  );
   const showFallbackMenu = !isTauriRuntime();
 
   const status = useMemo(() => {
@@ -380,8 +392,15 @@ function App() {
           }
           break;
         case "cut":
-        case "copy":
         case "paste":
+          if (readingMode) {
+            break;
+          }
+
+          editorRef.current?.focus();
+          requestAnimationFrame(() => commandEdit(action));
+          break;
+        case "copy":
           editorRef.current?.focus();
           requestAnimationFrame(() => commandEdit(action));
           break;
@@ -389,7 +408,10 @@ function App() {
           editorRef.current?.openSearch();
           break;
         case "replace":
-          editorRef.current?.openReplace();
+          // Reading mode cannot replace text, so Ctrl+H does nothing there.
+          if (!readingMode) {
+            editorRef.current?.openReplace();
+          }
           break;
         case "select-all":
           editorRef.current?.selectAll();
@@ -411,6 +433,17 @@ function App() {
             ...current,
             zoom: 100,
           }));
+          break;
+        case "toggle-reading-mode":
+          setReadingTabIds((current) => {
+            const next = new Set(current);
+
+            if (!next.delete(activeTab.id)) {
+              next.add(activeTab.id);
+            }
+
+            return next;
+          });
           break;
         case "toggle-word-wrap":
           setSettings((current) => ({
@@ -434,6 +467,7 @@ function App() {
       closeTab,
       dirtyTabsCanClose,
       openFile,
+      readingMode,
       saveActiveTab,
       tabs,
     ],
@@ -577,6 +611,54 @@ function App() {
     };
   }, []);
 
+  // Forget closed (or replaced) tabs so their ids do not pile up.
+  useEffect(() => {
+    setReadingTabIds((current) => {
+      const openIds = new Set(tabs.map((tab) => tab.id));
+      const kept = [...current].filter((id) => openIds.has(id));
+
+      return kept.length === current.size ? current : new Set(kept);
+    });
+  }, [tabs]);
+
+  const viewMenuStateRef = useRef({
+    readingMode,
+    wordWrap: settings.wordWrap,
+    showStatusBar: settings.showStatusBar,
+  });
+
+  useEffect(() => {
+    viewMenuStateRef.current = {
+      readingMode,
+      wordWrap: settings.wordWrap,
+      showStatusBar: settings.showStatusBar,
+    };
+    void syncNativeViewMenu(viewMenuStateRef.current);
+  }, [readingMode, settings.showStatusBar, settings.wordWrap]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    // The native menu is shared by every window; show this window's state
+    // whenever it becomes the focused one.
+    listenToWindowFocus(() => {
+      void syncNativeViewMenu(viewMenuStateRef.current);
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup?.();
+        return;
+      }
+
+      unlisten = cleanup;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | null = null;
@@ -700,6 +782,7 @@ function App() {
           scroll={activeTab.scroll}
           wordWrap={settings.wordWrap}
           zoom={settings.zoom}
+          readingMode={readingMode}
           onChange={(content) =>
             updateActiveTab({
               content,
@@ -720,6 +803,7 @@ function App() {
           characters={status.characters}
           words={status.words}
           wordWrap={settings.wordWrap}
+          readingMode={readingMode}
         />
       ) : null}
 
