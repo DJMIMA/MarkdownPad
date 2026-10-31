@@ -64,17 +64,19 @@ const UTF16LE_BOM: &[u8] = &[0xFF, 0xFE];
 const UTF16BE_BOM: &[u8] = &[0xFE, 0xFF];
 
 fn decode_utf16(bytes: &[u8], little_endian: bool) -> Option<String> {
-    if !bytes.len().is_multiple_of(2) {
+    let (pairs, odd_byte) = bytes.as_chunks::<2>();
+
+    if !odd_byte.is_empty() {
         return None;
     }
 
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| {
+    let units: Vec<u16> = pairs
+        .iter()
+        .map(|&pair| {
             if little_endian {
-                u16::from_le_bytes([pair[0], pair[1]])
+                u16::from_le_bytes(pair)
             } else {
-                u16::from_be_bytes([pair[0], pair[1]])
+                u16::from_be_bytes(pair)
             }
         })
         .collect();
@@ -377,6 +379,12 @@ mod tests {
     #[test]
     fn rejects_bytes_in_no_supported_encoding() {
         assert!(decode_text(&[0x82, 0xA0, 0xFF, 0xFF, 0x80]).is_err());
+    }
+
+    #[test]
+    fn rejects_utf16_with_a_dangling_byte() {
+        assert!(decode_text(&[0xFF, 0xFE, 0x41, 0x00, 0x42]).is_err());
+        assert_eq!(decode_text(&[0xFF, 0xFE, 0x41, 0x00]).unwrap().content, "A");
     }
 
     #[test]
