@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chromium } from "playwright";
+import { launchBrowser } from "./launch.mjs";
 
 const baseUrl = process.env.MARKDOWNPAD_URL ?? "http://127.0.0.1:1420";
 const blankUrl = new URL("?blank=1", baseUrl).toString();
@@ -13,10 +13,7 @@ Visit https://example.com and [site](https://example.com).
 `;
 
 async function run() {
-  const browser = await chromium.launch({
-    channel: "chrome",
-    headless: true,
-  });
+  const browser = await launchBrowser();
 
   try {
     const context = await browser.newContext({

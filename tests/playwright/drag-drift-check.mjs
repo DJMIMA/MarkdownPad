@@ -5,7 +5,7 @@
 // editor's drag handler therefore must hit-test the real DOM instead, so the
 // selection head keeps tracking the pointer no matter how far down you scroll.
 import assert from "node:assert/strict";
-import { chromium } from "playwright";
+import { launchBrowser } from "./launch.mjs";
 
 const baseUrl = process.env.MARKDOWNPAD_URL ?? "http://127.0.0.1:1420";
 const blankUrl = new URL("?blank=1", baseUrl).toString();
@@ -43,7 +43,7 @@ function buildTallDocument() {
   return sections.join("\n");
 }
 
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+const browser = await launchBrowser();
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const consoleErrors = [];
