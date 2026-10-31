@@ -13,6 +13,7 @@ const checks = [
   "click-caret-check.mjs",
   "drag-drift-check.mjs",
   "reading-mode-check.mjs",
+  "editor-safety-check.mjs",
 ];
 
 async function isUp() {

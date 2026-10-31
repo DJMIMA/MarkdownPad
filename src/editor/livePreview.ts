@@ -5,7 +5,7 @@ import {
   SearchQuery,
   setSearchQuery,
 } from "@codemirror/search";
-import type { Range } from "@codemirror/state";
+import type { Range, Text } from "@codemirror/state";
 import {
   EditorSelection,
   EditorState,
@@ -18,6 +18,7 @@ import {
   WidgetType,
   EditorView,
   ViewPlugin,
+  type ViewUpdate,
 } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef } from "@lezer/common";
 // The explicit extension lets `node --test` load this module directly.
@@ -44,6 +45,9 @@ type SelectedTableCell = TableCellPosition &
 
 type TableCellSelection = {
   wrapper: HTMLElement;
+  // The document the cell offsets belong to. Any edit or tab switch makes a
+  // new document, and the stored offsets must then never be used again.
+  doc?: Text;
   rowFrom: number;
   rowTo: number;
   columnFrom: number;
@@ -610,12 +614,15 @@ async function copyTableCellSelection(view: EditorView) {
 }
 
 async function cutTableCellSelection(view: EditorView) {
-  if (!(await copyTableCellSelection(view))) {
+  // Hold on to the selection: the clipboard fallback briefly moves the focus
+  // away, which clears the live selection before the copy finishes.
+  const selection = tableCellSelections.get(view);
+
+  if (!selection || !(await writeClipboardText(tableCellSelectionText(selection)))) {
     return false;
   }
 
-  deleteTableCellSelection(view);
-  return true;
+  return deleteTableCellSelection(view, selection);
 }
 
 function showTableCellSelectionMenu(
@@ -700,7 +707,7 @@ function setTableCellSelection(
     clearTableCellSelection(view);
   }
 
-  tableCellSelections.set(view, selection);
+  tableCellSelections.set(view, { ...selection, doc: view.state.doc });
 
   if (options.menuAnchor) {
     showTableCellSelectionMenu(view, selection, options.menuAnchor);
@@ -747,10 +754,17 @@ function tableCellSelectionText(selection: TableCellSelection) {
   return rows.join("\n");
 }
 
-function deleteTableCellSelection(view: EditorView) {
-  const selection = tableCellSelections.get(view);
-
+function deleteTableCellSelection(
+  view: EditorView,
+  selection = tableCellSelections.get(view),
+) {
   if (!selection) {
+    return false;
+  }
+
+  // Offsets taken from an older document would delete unrelated text.
+  if (selection.doc !== view.state.doc || isReadingMode(view.state)) {
+    clearTableCellSelection(view);
     return false;
   }
 
@@ -781,6 +795,50 @@ function deleteTableCellSelection(view: EditorView) {
   });
   view.focus();
   return true;
+}
+
+// A key pressed (or text pasted) while cells are selected acts on the first
+// selected cell: typed or pasted text replaces its content, other keys start
+// from the end of it. The caret must be a plain cursor, since only an empty
+// selection reveals the table source that the browser can put text into.
+function beginEditingSelectedCell(view: EditorView, replaceContent: boolean) {
+  const selection = tableCellSelections.get(view);
+
+  if (!selection) {
+    return;
+  }
+
+  const cell = selection.doc === view.state.doc
+    ? [...selection.cells]
+        .filter((candidate) =>
+          Number.isFinite(candidate.from) &&
+          Number.isFinite(candidate.to) &&
+          candidate.from <= candidate.to,
+        )
+        .sort((first, second) => first.row - second.row || first.column - second.column)[0]
+    : undefined;
+
+  clearTableCellSelection(view);
+
+  if (!cell) {
+    return;
+  }
+
+  if (replaceContent && cell.to > cell.from) {
+    view.dispatch({
+      changes: { from: cell.from, to: cell.to, insert: "" },
+      selection: EditorSelection.cursor(cell.from),
+      scrollIntoView: true,
+      userEvent: "delete.tableCell",
+    });
+    return;
+  }
+
+  view.dispatch({
+    selection: EditorSelection.cursor(replaceContent ? cell.from : cell.to),
+    scrollIntoView: true,
+    userEvent: "select",
+  });
 }
 
 const linkClickHandler = EditorView.domEventHandlers({
@@ -1200,7 +1258,20 @@ const sourceLineNavigation = ViewPlugin.fromClass(
       event.clipboardData.setData("text/plain", tableCellSelectionText(selection));
       event.preventDefault();
       event.stopImmediatePropagation();
-      deleteTableCellSelection(this.view);
+      deleteTableCellSelection(this.view, selection);
+    };
+
+    private readonly handlePaste = () => {
+      if (tableCellSelections.has(this.view) && !isReadingMode(this.view.state)) {
+        // CodeMirror's own paste handler runs next and inserts at the new
+        // caret, i.e. into the first selected cell.
+        beginEditingSelectedCell(this.view, true);
+      }
+    };
+
+    // The cell menu is positioned once; drop it when the text scrolls away.
+    private readonly handleScroll = () => {
+      removeTableCellSelectionMenu(this.view);
     };
 
     private readonly handleKeyDown = (event: KeyboardEvent) => {
@@ -1218,6 +1289,31 @@ const sourceLineNavigation = ViewPlugin.fromClass(
           clearTableCellSelection(this.view);
           event.preventDefault();
           event.stopImmediatePropagation();
+          return;
+        }
+
+        if (["Shift", "Control", "Alt", "Meta", "CapsLock"].includes(event.key)) {
+          return;
+        }
+
+        if (event.ctrlKey || event.metaKey || isReadingMode(this.view.state)) {
+          // Copy, cut and paste use the cell selection (see the clipboard
+          // handlers); any other shortcut works on the normal selection.
+          if (!["c", "x", "v", "insert"].includes(event.key.toLowerCase())) {
+            clearTableCellSelection(this.view);
+          }
+
+          return;
+        }
+
+        const typesText =
+          !event.altKey &&
+          (event.key.length === 1 || event.key === "Process" || event.isComposing);
+
+        // The key itself goes through and acts at the new caret.
+        beginEditingSelectedCell(this.view, typesText);
+
+        if (typesText) {
           return;
         }
       }
@@ -1251,13 +1347,42 @@ const sourceLineNavigation = ViewPlugin.fromClass(
       this.view = view;
       this.view.contentDOM.addEventListener("copy", this.handleCopy, true);
       this.view.contentDOM.addEventListener("cut", this.handleCut, true);
+      this.view.contentDOM.addEventListener("paste", this.handlePaste, true);
       this.view.contentDOM.addEventListener("keydown", this.handleKeyDown, true);
+      this.view.scrollDOM.addEventListener("scroll", this.handleScroll);
+    }
+
+    update(update: ViewUpdate) {
+      if (!tableCellSelections.has(update.view) && !tableCellSelectionMenus.has(update.view)) {
+        return;
+      }
+
+      // A cell selection only describes the document it was made in, and its
+      // menu only makes sense while the editor has the focus.
+      // Selection changes made by code (such as Select All from the menu)
+      // replace the cell selection too; the ones CodeMirror reads from the
+      // DOM while cells are dragged over carry the "select" user event.
+      const programmaticSelection =
+        update.selectionSet &&
+        !update.transactions.some((transaction) => transaction.isUserEvent("select"));
+
+      if (
+        update.docChanged ||
+        programmaticSelection ||
+        (update.focusChanged && !update.view.hasFocus)
+      ) {
+        clearTableCellSelection(update.view);
+      }
     }
 
     destroy() {
+      // Runs when the editor is torn down or another tab's state is shown.
+      clearTableCellSelection(this.view);
       this.view.contentDOM.removeEventListener("copy", this.handleCopy, true);
       this.view.contentDOM.removeEventListener("cut", this.handleCut, true);
+      this.view.contentDOM.removeEventListener("paste", this.handlePaste, true);
       this.view.contentDOM.removeEventListener("keydown", this.handleKeyDown, true);
+      this.view.scrollDOM.removeEventListener("scroll", this.handleScroll);
     }
   },
 );

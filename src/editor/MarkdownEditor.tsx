@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -27,7 +28,13 @@ import {
   SearchQuery,
   setSearchQuery,
 } from "@codemirror/search";
-import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
+import {
+  Compartment,
+  EditorSelection,
+  EditorState,
+  type Extension,
+  Text,
+} from "@codemirror/state";
 import {
   EditorView,
   highlightActiveLine,
@@ -38,9 +45,13 @@ import { GFM } from "@lezer/markdown";
 import { tags } from "@lezer/highlight";
 import { livePreview } from "./livePreview";
 import { markdownPadKeymap } from "./markdownKeymap";
-import { externalDocumentSync, readingMode as readingModeExtension } from "./readingMode";
+import { readingMode as readingModeExtension } from "./readingMode";
 
 interface MarkdownEditorProps {
+  /** Id of the tab being shown; each tab keeps its own editor state. */
+  docId: string;
+  /** Ids of all open tabs, so the states of closed tabs can be dropped. */
+  openDocIds: readonly string[];
   value: string;
   cursor: {
     anchor: number;
@@ -342,7 +353,23 @@ const bodyFont =
   '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", system-ui, sans-serif';
 const monoFont = '"Cascadia Mono", "Consolas", "BIZ UDGothic", monospace';
 
-function editorTheme(zoom: number, wordWrap: boolean) {
+// EditorView.theme mounts a new style rule set on every call, so build each
+// zoom / wrap combination once and reuse it (tab switches reapply the theme).
+const editorThemeCache = new Map<string, Extension>();
+
+function editorTheme(zoom: number, wordWrap: boolean): Extension {
+  const key = `${zoom}:${wordWrap}`;
+  let theme = editorThemeCache.get(key);
+
+  if (!theme) {
+    theme = buildEditorTheme(zoom, wordWrap);
+    editorThemeCache.set(key, theme);
+  }
+
+  return theme;
+}
+
+function buildEditorTheme(zoom: number, wordWrap: boolean) {
   const fontSize = Math.max(12, Math.round(16 * (zoom / 100)));
 
   return EditorView.theme({
@@ -777,6 +804,8 @@ function editorTheme(zoom: number, wordWrap: boolean) {
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
 function MarkdownEditor({
+  docId,
+  openDocIds,
   value,
   cursor,
   scroll,
@@ -792,8 +821,18 @@ function MarkdownEditor({
   const onChangeRef = useRef(onChange);
   const onCursorChangeRef = useRef(onCursorChange);
   const onScrollChangeRef = useRef(onScrollChange);
-  const syncingValueRef = useRef(false);
   const syncingScrollRef = useRef(false);
+  // The tab whose state the view shows, and the text the editor last reported
+  // through onChange. Comparing against the latter tells our own echo apart
+  // from an outside change without comparing the whole text per keystroke.
+  const docIdRef = useRef(docId);
+  const lastEmittedRef = useRef(value);
+  // Each inactive tab keeps its own EditorState, so undo history, selection
+  // and search state never leak from one tab into another. (Swapping the text
+  // of one shared state let Ctrl+Z pull the previous tab's text into a tab.)
+  const inactiveStatesRef = useRef(new Map<string, EditorState>());
+  const settingsRef = useRef({ wordWrap, zoom, readingMode });
+  settingsRef.current = { wordWrap, zoom, readingMode };
   const wrapCompartment = useMemo(() => new Compartment(), []);
   const themeCompartment = useMemo(() => new Compartment(), []);
   const readingCompartment = useMemo(() => new Compartment(), []);
@@ -873,95 +912,143 @@ function MarkdownEditor({
     },
   }), []);
 
+  const listeners = useMemo(
+    () => [
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          const text = update.state.doc.toString();
+          lastEmittedRef.current = text;
+          onChangeRef.current(text);
+        }
+
+        if (update.selectionSet || update.docChanged) {
+          const selection = update.state.selection.main;
+          onCursorChangeRef.current({
+            anchor: selection.anchor,
+            head: selection.head,
+          });
+        }
+      }),
+      EditorView.domEventHandlers({
+        scroll(_event, view) {
+          if (syncingScrollRef.current) {
+            return;
+          }
+
+          onScrollChangeRef.current({
+            x: view.scrollDOM.scrollLeft,
+            y: view.scrollDOM.scrollTop,
+          });
+        },
+      }),
+    ],
+    [],
+  );
+
+  const createState = useCallback(
+    (content: string, selection: { anchor: number; head: number }) => {
+      const settings = settingsRef.current;
+      const doc = Text.of(content.split(/\r\n|\r|\n/));
+      const clamp = (position: number) =>
+        Math.min(Math.max(position, 0), doc.length);
+
+      return EditorState.create({
+        doc,
+        selection: EditorSelection.single(
+          clamp(selection.anchor),
+          clamp(selection.head),
+        ),
+        extensions: [
+          history(),
+          indentOnInput(),
+          syntaxHighlighting(markdownHighlightStyle, { fallback: true }),
+          bracketMatching(),
+          markdown({
+            addKeymap: false,
+            extensions: [GFM],
+          }),
+          search({
+            top: true,
+            createPanel(view) {
+              return new MarkdownPadSearchPanel(view);
+            },
+          }),
+          highlightSelectionMatches(),
+          // Kept for its .cm-activeLine marker (tests and tooling rely on it);
+          // the theme leaves it unpainted, as Obsidian does.
+          highlightActiveLine(),
+          markdownPadKeymap,
+          keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+          livePreview,
+          wrapCompartment.of(settings.wordWrap ? EditorView.lineWrapping : []),
+          themeCompartment.of(editorTheme(settings.zoom, settings.wordWrap)),
+          readingCompartment.of(readingModeExtension(settings.readingMode)),
+          listeners,
+        ],
+      });
+    },
+    [listeners, readingCompartment, themeCompartment, wrapCompartment],
+  );
+
+  // A stored state keeps the settings it had when its tab was last shown;
+  // bring zoom, wrapping and reading mode in line with the current ones.
+  const applyCurrentSettings = useCallback(
+    (view: EditorView) => {
+      const settings = settingsRef.current;
+
+      view.dispatch({
+        effects: [
+          wrapCompartment.reconfigure(
+            settings.wordWrap ? EditorView.lineWrapping : [],
+          ),
+          themeCompartment.reconfigure(
+            editorTheme(settings.zoom, settings.wordWrap),
+          ),
+          readingCompartment.reconfigure(
+            readingModeExtension(settings.readingMode),
+          ),
+        ],
+      });
+    },
+    [readingCompartment, themeCompartment, wrapCompartment],
+  );
+
+  const restoreScroll = useCallback(
+    (view: EditorView, target: { x: number; y: number }) => {
+      // Ignore the scroll events the state swap itself causes, so they are not
+      // stored as the tab's position.
+      syncingScrollRef.current = true;
+      requestAnimationFrame(() => {
+        view.scrollDOM.scrollLeft = target.x;
+        view.scrollDOM.scrollTop = target.y;
+        requestAnimationFrame(() => {
+          syncingScrollRef.current = false;
+        });
+      });
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!hostRef.current) {
       return;
     }
 
-    const updateListener = EditorView.updateListener.of((update) => {
-      if (update.docChanged && !syncingValueRef.current) {
-        onChangeRef.current(update.state.doc.toString());
-      }
-
-      if (update.selectionSet || update.docChanged) {
-        const selection = update.state.selection.main;
-        onCursorChangeRef.current({
-          anchor: selection.anchor,
-          head: selection.head,
-        });
-      }
-    });
-
-    const scrollListener = EditorView.domEventHandlers({
-      scroll(_event, view) {
-        if (syncingScrollRef.current) {
-          return;
-        }
-
-        onScrollChangeRef.current({
-          x: view.scrollDOM.scrollLeft,
-          y: view.scrollDOM.scrollTop,
-        });
-      },
-    });
-
-    const initialSelection = EditorSelection.single(
-      Math.min(cursor.anchor, value.length),
-      Math.min(cursor.head, value.length),
-    );
-
-    const state = EditorState.create({
-      doc: value,
-      selection: initialSelection,
-      extensions: [
-        history(),
-        indentOnInput(),
-        syntaxHighlighting(markdownHighlightStyle, { fallback: true }),
-        bracketMatching(),
-        markdown({
-          addKeymap: false,
-          extensions: [GFM],
-        }),
-        search({
-          top: true,
-          createPanel(view) {
-            return new MarkdownPadSearchPanel(view);
-          },
-        }),
-        highlightSelectionMatches(),
-        // Kept for its .cm-activeLine marker (tests and tooling rely on it);
-        // the theme leaves it unpainted, as Obsidian does.
-        highlightActiveLine(),
-        scrollListener,
-        markdownPadKeymap,
-        keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
-        livePreview,
-        wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
-        themeCompartment.of(editorTheme(zoom, wordWrap)),
-        readingCompartment.of(readingModeExtension(readingMode)),
-        updateListener,
-      ],
-    });
-
     const view = new EditorView({
-      state,
+      state: createState(value, cursor),
       parent: hostRef.current,
     });
 
     viewRef.current = view;
-
-    requestAnimationFrame(() => {
-      syncingScrollRef.current = true;
-      view.scrollDOM.scrollLeft = scroll.x;
-      view.scrollDOM.scrollTop = scroll.y;
-      syncingScrollRef.current = false;
-    });
+    docIdRef.current = docId;
+    lastEmittedRef.current = value;
+    restoreScroll(view, scroll);
 
     return () => {
       view.destroy();
       viewRef.current = null;
     };
-  }, [readingCompartment, themeCompartment, wrapCompartment]);
+  }, [createState, restoreScroll]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -970,22 +1057,51 @@ function MarkdownEditor({
       return;
     }
 
-    const currentValue = view.state.doc.toString();
+    if (docIdRef.current !== docId) {
+      const inactiveStates = inactiveStatesRef.current;
+      const stored = inactiveStates.get(docId);
 
-    if (currentValue !== value) {
-      syncingValueRef.current = true;
-      view.dispatch({
-        changes: {
-          from: 0,
-          to: currentValue.length,
-          insert: value,
-        },
-        // Loading another tab's text is not an edit; reading mode allows it.
-        annotations: externalDocumentSync.of(true),
-      });
-      syncingValueRef.current = false;
+      inactiveStates.set(docIdRef.current, view.state);
+      inactiveStates.delete(docId);
+      docIdRef.current = docId;
+      lastEmittedRef.current = value;
+
+      if (stored && stored.doc.toString() === value) {
+        view.setState(stored);
+        applyCurrentSettings(view);
+      } else {
+        view.setState(createState(value, cursor));
+      }
+
+      restoreScroll(view, scroll);
+      return;
     }
-  }, [value]);
+
+    if (value === lastEmittedRef.current) {
+      return;
+    }
+
+    lastEmittedRef.current = value;
+
+    // The tab's text was replaced from outside the editor (for example by
+    // reloading the file from disk): start a fresh state and undo history.
+    if (view.state.doc.toString() !== value) {
+      view.setState(createState(value, cursor));
+    }
+  }, [docId, value]);
+
+  // Forget the states of closed tabs.
+  const openDocKey = openDocIds.join("\n");
+
+  useEffect(() => {
+    const open = new Set(openDocKey.split("\n"));
+
+    for (const id of [...inactiveStatesRef.current.keys()]) {
+      if (!open.has(id)) {
+        inactiveStatesRef.current.delete(id);
+      }
+    }
+  }, [openDocKey]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -1011,7 +1127,7 @@ function MarkdownEditor({
   useEffect(() => {
     const view = viewRef.current;
 
-    if (!view) {
+    if (!view || syncingScrollRef.current) {
       return;
     }
 

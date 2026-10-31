@@ -122,6 +122,7 @@ function App() {
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const readingMode = readingTabIds.has(activeTab.id);
   const nextUntitledIndex = tabs.filter((tab) => tab.isUntitled).length + 1;
+  const openTabIds = useMemo(() => tabs.map((tab) => tab.id), [tabs]);
   const groups = useMemo(
     () => menuGroups(settings, { readingMode }),
     [readingMode, settings],
@@ -387,7 +388,13 @@ function App() {
         case "close-window":
         case "quit":
           if (await dirtyTabsCanClose(tabs)) {
-            await discardRecoverySnapshot();
+            // Until the restore question is answered, the snapshot is the
+            // only copy of the previous session's unsaved text: keep it so
+            // the question comes back on the next start.
+            if (recoveryReadyRef.current) {
+              await discardRecoverySnapshot();
+            }
+
             await closeCurrentWindow();
           }
           break;
@@ -777,6 +784,8 @@ function App() {
       <main className="workspace" onClick={() => setOpenMenuId(null)}>
         <MarkdownEditor
           ref={editorRef}
+          docId={activeTab.id}
+          openDocIds={openTabIds}
           value={activeTab.content}
           cursor={activeTab.cursor}
           scroll={activeTab.scroll}
