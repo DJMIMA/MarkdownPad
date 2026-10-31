@@ -208,6 +208,27 @@ try {
     await page.close();
   }
 
+  // Long documents: the end renders once the background parser gets there,
+  // without having to move the caret first.
+  {
+    const page = await openBlankPage(browser, errors);
+    const headingClass = await page.evaluate(async () => {
+      const view = document.querySelector(".cm-content").cmTile.root.view;
+      const body = Array.from({ length: 6000 }, (_, index) => `- item ${index} **bold** text`);
+      const text = `${body.join("\n")}\n\n# 最後の見出し\n\n終わり`;
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      view.dispatch({ changes: { from: 0, insert: text }, selection: { anchor: 0 } });
+      view.scrollDOM.scrollTop = view.scrollDOM.scrollHeight;
+      await sleep(1500);
+      view.scrollDOM.scrollTop = view.scrollDOM.scrollHeight;
+      await sleep(1500);
+      return [...document.querySelectorAll(".cm-line")]
+        .find((line) => line.textContent.includes("最後の見出し"))?.className;
+    });
+    assert.match(headingClass ?? "", /cm-md-heading-1/);
+    await page.close();
+  }
+
   assert.deepEqual(errors, []);
   console.log("PASS: undo and table cell selections stay with their own document");
 } finally {

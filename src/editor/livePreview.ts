@@ -11,6 +11,7 @@ import {
   EditorState,
   RangeSetBuilder,
   StateField,
+  type Transaction,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -143,6 +144,43 @@ function rangesIntersect(first: SourceRange, second: SourceRange) {
   return first.from <= second.to && second.from <= first.to;
 }
 
+// Structural blocks (tables, code blocks, rules) that contain `position`,
+// found by walking up from the position instead of scanning the whole tree.
+function structuralBlocksAt(state: EditorState, position: number): SourceRange[] {
+  const tree = syntaxTree(state);
+  const blocks: SourceRange[] = [];
+
+  for (const side of [-1, 1] as const) {
+    for (
+      let node: SyntaxNode | null = tree.resolveInner(position, side);
+      node;
+      node = node.parent
+    ) {
+      if (
+        isStructuralBlock(node.name) &&
+        rangeContainsPosition(node, position) &&
+        !blocks.some((block) => block.from === node!.from && block.to === node!.to)
+      ) {
+        blocks.push({ from: node.from, to: node.to });
+      }
+    }
+  }
+
+  return blocks;
+}
+
+// Blocks whose source an empty selection reveals. (Reading mode reveals
+// nothing.)
+function selectionRevealedBlocks(state: EditorState): SourceRange[] {
+  if (isReadingMode(state)) {
+    return [];
+  }
+
+  return state.selection.ranges
+    .filter((range) => range.empty)
+    .flatMap((range) => structuralBlocksAt(state, range.head));
+}
+
 function sourceRangesForSelection(state: EditorState): SourceRanges {
   const ranges: SourceRanges = {
     all: [],
@@ -154,39 +192,19 @@ function sourceRangesForSelection(state: EditorState): SourceRanges {
     return ranges;
   }
 
-  const tree = syntaxTree(state);
-
   for (const selectionRange of state.selection.ranges) {
-    const from = Math.min(selectionRange.from, selectionRange.to);
-    const to = Math.max(selectionRange.from, selectionRange.to);
-    const startLine = state.doc.lineAt(from);
-    const endLine = state.doc.lineAt(to);
+    const startLine = state.doc.lineAt(selectionRange.from);
+    const endLine = state.doc.lineAt(selectionRange.to);
 
     ranges.all.push({
       from: startLine.from,
       to: endLine.to,
     });
+  }
 
-    tree.iterate({
-      enter(node) {
-        if (!isStructuralBlock(node.name)) {
-          return;
-        }
-
-        if (
-          selectionRange.empty &&
-          rangeContainsPosition({ from: node.from, to: node.to }, selectionRange.head)
-        ) {
-          const structuralRange = {
-            from: node.from,
-            to: node.to,
-          };
-
-          ranges.all.push(structuralRange);
-          ranges.structural.push(structuralRange);
-        }
-      },
-    });
+  for (const block of selectionRevealedBlocks(state)) {
+    ranges.all.push(block);
+    ranges.structural.push(block);
   }
 
   return ranges;
@@ -201,13 +219,15 @@ type HighlightSegment = {
 export function searchMatchRanges(
   state: EditorState,
   query: SearchQuery,
+  from?: number,
+  to?: number,
 ): SourceRange[] {
   if (!query.search || !query.valid) {
     return [];
   }
 
   const ranges: SourceRange[] = [];
-  const cursor = query.getCursor(state);
+  const cursor = query.getCursor(state, from, to);
 
   for (let next = cursor.next(); !next.done; next = cursor.next()) {
     if (next.value.to > next.value.from) {
@@ -221,44 +241,48 @@ export function searchMatchRanges(
   return ranges;
 }
 
-function activeSearchMatches(state: EditorState): SourceRange[] {
-  if (!searchPanelOpen(state)) {
-    return [];
-  }
-
-  return searchMatchRanges(state, getSearchQuery(state));
+interface StructuralBlock extends SourceRange {
+  name: string;
+  /** The block shows its Markdown source instead of a rendered widget. */
+  revealed: boolean;
+  /** Search matches inside the block, while the search panel is open. */
+  matches: SourceRange[];
 }
 
-// Horizontal rules render as an <hr> with no text, so a match inside `---` can
-// only be shown by revealing its source. Tables and code blocks keep their
-// rendering and highlight matches in place instead.
-function horizontalRuleMatchRanges(
-  state: EditorState,
-  matches: SourceRange[],
-): SourceRange[] {
-  if (matches.length === 0) {
-    return [];
-  }
+// Tables, code blocks and rules overlapping from..to. Paragraphs and headings
+// cannot contain blocks, so their inline content is never walked.
+function structuralBlocks(state: EditorState, from: number, to: number): StructuralBlock[] {
+  const query = searchPanelOpen(state) ? getSearchQuery(state) : null;
+  const revealedBySelection = selectionRevealedBlocks(state);
+  const blocks: StructuralBlock[] = [];
 
-  const tree = syntaxTree(state);
-  const ranges: SourceRange[] = [];
-
-  tree.iterate({
+  syntaxTree(state).iterate({
+    from,
+    to,
     enter(node) {
-      if (node.name !== "HorizontalRule") {
-        return;
+      if (isStructuralBlock(node.name)) {
+        const matches = query ? searchMatchRanges(state, query, node.from, node.to) : [];
+        // A rule has no text to highlight a match in, so a match shows its
+        // `---` source instead (also in reading mode).
+        const revealed =
+          revealedBySelection.some(
+            (block) => block.from === node.from && block.to === node.to,
+          ) ||
+          (node.name === "HorizontalRule" && matches.length > 0);
+
+        blocks.push({ name: node.name, from: node.from, to: node.to, revealed, matches });
+        return false;
       }
 
-      if (matches.some((match) => match.from < node.to && node.from < match.to)) {
-        ranges.push({
-          from: node.from,
-          to: node.to,
-        });
+      if (node.name === "Paragraph" || /^(ATX|Setext)Heading/.test(node.name)) {
+        return false;
       }
+
+      return undefined;
     },
   });
 
-  return ranges;
+  return blocks;
 }
 
 // Split a run of widget text (a table cell or code body) into plain and
@@ -2295,10 +2319,14 @@ function addListLayoutDecorations(
   state: EditorState,
   decorations: PreviewDecoration[],
   sourceRanges: SourceRange[],
+  from: number,
+  to: number,
 ) {
   const contentStarts: number[] = [];
 
   syntaxTree(state).iterate({
+    from,
+    to,
     enter(node) {
       if (isStructuralBlock(node.name)) {
         return false;
@@ -2417,42 +2445,138 @@ function addListLayoutDecorations(
   });
 }
 
-function buildLivePreviewDecorations(state: EditorState): DecorationSet {
+function sortedDecorationSet(decorations: PreviewDecoration[]): DecorationSet {
+  decorations.sort((first, second) => {
+    if (first.from !== second.from) {
+      return first.from - second.from;
+    }
+
+    const firstStartSide = (first.value as Decoration & { startSide?: number })
+      .startSide ?? 0;
+    const secondStartSide = (second.value as Decoration & { startSide?: number })
+      .startSide ?? 0;
+
+    if (firstStartSide !== secondStartSide) {
+      return firstStartSide - secondStartSide;
+    }
+
+    if (first.to !== second.to) {
+      return first.to - second.to;
+    }
+
+    const firstEndSide = (first.value as Decoration & { endSide?: number })
+      .endSide ?? 0;
+    const secondEndSide = (second.value as Decoration & { endSide?: number })
+      .endSide ?? 0;
+
+    return firstEndSide - secondEndSide;
+  });
+
+  const builder = new RangeSetBuilder<Decoration>();
+
+  for (const decoration of decorations) {
+    builder.add(decoration.from, decoration.to, decoration.value);
+  }
+
+  return builder.finish();
+}
+
+// Rendered tables, code blocks and rules. Block widgets have to come from
+// the editor state (not a view plugin), so this covers the whole document;
+// it only walks block structure, never inline content.
+function buildBlockDecorations(state: EditorState): DecorationSet {
   const decorations: PreviewDecoration[] = [];
-  const sourceRanges = sourceRangesForSelection(state);
-  const searchMatches = activeSearchMatches(state);
   const mainSelection = state.selection.main;
   const readOnly = isReadingMode(state);
 
-  for (const range of horizontalRuleMatchRanges(state, searchMatches)) {
-    sourceRanges.all.push(range);
-    sourceRanges.structural.push(range);
-  }
+  for (const block of structuralBlocks(state, 0, state.doc.length)) {
+    if (block.revealed) {
+      continue;
+    }
 
-  const tree = syntaxTree(state);
+    const text = state.doc.sliceString(block.from, block.to);
+    const firstLine = state.doc.lineAt(block.from);
+    const editAt =
+      block.name === "FencedCode" && firstLine.to < block.to
+        ? firstLine.to + 1
+        : block.from;
+    const blockSelected =
+      block.matches.length > 0 &&
+      !mainSelection.empty &&
+      mainSelection.from < block.to &&
+      block.from < mainSelection.to
+        ? { from: mainSelection.from, to: mainSelection.to }
+        : null;
+    let widget: WidgetType;
 
-  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
-    const line = state.doc.line(lineNumber);
-    const lineRange = {
-      from: line.from,
-      to: line.to,
-    };
-    const decoration = isRangeInSourceRange(lineRange, sourceRanges.structural)
-      ? structuralSourceLineDecoration(line.from, line.to)
-      : sourceLineDecoration(line.from, line.to);
+    if (block.name === "FencedCode") {
+      widget = new CodeBlockWidget(text, editAt, block.matches, blockSelected, readOnly);
+    } else if (block.name === "Table") {
+      widget = new TableWidget(text, editAt, block.matches, blockSelected, readOnly);
+    } else {
+      widget = new HorizontalRuleWidget(text, editAt, readOnly);
+    }
 
     addDecoration(
       decorations,
-      line.from,
-      line.from,
-      decoration,
+      block.from,
+      block.to,
+      Decoration.replace({
+        widget,
+        block: true,
+      }),
     );
   }
 
-  addListLayoutDecorations(state, decorations, sourceRanges.all);
+  return sortedDecorationSet(decorations);
+}
 
-  tree.iterate({
+// Line and inline decorations for the lines currently rendered (the
+// viewport): headings, quotes, list layout, hidden Markdown marks, links,
+// inline code, task boxes and images. Built per viewport so typing and
+// moving the caret stay fast in long documents.
+function buildInlineDecorations(
+  state: EditorState,
+  from: number,
+  to: number,
+): DecorationSet {
+  const decorations: PreviewDecoration[] = [];
+  const sourceRanges = sourceRangesForSelection(state);
+  const blocks = structuralBlocks(state, from, to);
+
+  for (const block of blocks) {
+    if (block.revealed && !isRangeInSourceRange(block, sourceRanges.structural)) {
+      sourceRanges.all.push(block);
+      sourceRanges.structural.push(block);
+    }
+  }
+
+  const isRenderedBlock = (node: SyntaxNodeRef) =>
+    blocks.some(
+      (block) => !block.revealed && block.from === node.from && block.to === node.to,
+    );
+
+  for (let position = from; position <= to; ) {
+    const line = state.doc.lineAt(position);
+    const decoration = isRangeInSourceRange(line, sourceRanges.structural)
+      ? structuralSourceLineDecoration(line.from, line.to)
+      : sourceLineDecoration(line.from, line.to);
+
+    addDecoration(decorations, line.from, line.from, decoration);
+    position = line.to + 1;
+  }
+
+  addListLayoutDecorations(state, decorations, sourceRanges.all, from, to);
+
+  syntaxTree(state).iterate({
+    from,
+    to,
     enter(node) {
+      // Rendered blocks are widgets from the block field.
+      if (isStructuralBlock(node.name) && isRenderedBlock(node)) {
+        return false;
+      }
+
       if (node.name === "InlineCode") {
         addDecoration(decorations, node.from, node.to, inlineCodeDecoration);
       }
@@ -2471,8 +2595,8 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
       }
 
       if (node.name === "Blockquote") {
-        const fromLine = state.doc.lineAt(node.from);
-        const toLine = state.doc.lineAt(node.to);
+        const fromLine = state.doc.lineAt(Math.max(node.from, from));
+        const toLine = state.doc.lineAt(Math.min(node.to, to));
 
         for (let lineNumber = fromLine.number; lineNumber <= toLine.number; lineNumber += 1) {
           const line = state.doc.line(lineNumber);
@@ -2493,60 +2617,6 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
             clickableLinkDecoration(url),
           );
         }
-      }
-
-      if (
-        isStructuralBlock(node.name) &&
-        !isInSourceRange(node, sourceRanges.structural)
-      ) {
-        const text = state.doc.sliceString(node.from, node.to);
-        const firstLine = state.doc.lineAt(node.from);
-        const editAt =
-          node.name === "FencedCode" && firstLine.to < node.to
-            ? firstLine.to + 1
-            : node.from;
-        const blockMatches = searchMatches.filter(
-          (match) => match.from < node.to && node.from < match.to,
-        );
-        const blockSelected =
-          blockMatches.length > 0 &&
-          !mainSelection.empty &&
-          mainSelection.from < node.to &&
-          node.from < mainSelection.to
-            ? { from: mainSelection.from, to: mainSelection.to }
-            : null;
-        let widget: WidgetType;
-
-        if (node.name === "FencedCode") {
-          widget = new CodeBlockWidget(
-            text,
-            editAt,
-            blockMatches,
-            blockSelected,
-            readOnly,
-          );
-        } else if (node.name === "Table") {
-          widget = new TableWidget(
-            text,
-            editAt,
-            blockMatches,
-            blockSelected,
-            readOnly,
-          );
-        } else {
-          widget = new HorizontalRuleWidget(text, editAt, readOnly);
-        }
-
-        addDecoration(
-          decorations,
-          node.from,
-          node.to,
-          Decoration.replace({
-            widget,
-            block: true,
-          }),
-        );
-        return false;
       }
 
       if (node.name === "Image" && !isInSourceRange(node, sourceRanges.all)) {
@@ -2640,74 +2710,122 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
           return;
         }
 
-        const to =
+        const tokenTo =
           node.name === "HeaderMark" || node.name === "QuoteMark"
             ? tokenEndWithTrailingSpace(state, node.to)
             : node.to;
-        addDecoration(decorations, node.from, to, hiddenMarkDecoration);
+        addDecoration(decorations, node.from, tokenTo, hiddenMarkDecoration);
       }
     },
   });
 
-  decorations.sort((first, second) => {
-    if (first.from !== second.from) {
-      return first.from - second.from;
-    }
-
-    const firstStartSide = (first.value as Decoration & { startSide?: number })
-      .startSide ?? 0;
-    const secondStartSide = (second.value as Decoration & { startSide?: number })
-      .startSide ?? 0;
-
-    if (firstStartSide !== secondStartSide) {
-      return firstStartSide - secondStartSide;
-    }
-
-    if (first.to !== second.to) {
-      return first.to - second.to;
-    }
-
-    const firstEndSide = (first.value as Decoration & { endSide?: number })
-      .endSide ?? 0;
-    const secondEndSide = (second.value as Decoration & { endSide?: number })
-      .endSide ?? 0;
-
-    return firstEndSide - secondEndSide;
-  });
-
-  const builder = new RangeSetBuilder<Decoration>();
-
-  for (const decoration of decorations) {
-    builder.add(decoration.from, decoration.to, decoration.value);
-  }
-
-  return builder.finish();
+  return sortedDecorationSet(decorations);
 }
 
-const livePreviewField = StateField.define<DecorationSet>({
+/** Exposed for tests: the line and inline decorations of a whole document. */
+export function inlinePreviewDecorations(state: EditorState): DecorationSet {
+  return buildInlineDecorations(state, 0, state.doc.length);
+}
+
+function searchStateChanged(transaction: Transaction) {
+  return (
+    transaction.effects.some((effect) => effect.is(setSearchQuery)) ||
+    searchPanelOpen(transaction.startState) !== searchPanelOpen(transaction.state)
+  );
+}
+
+function treeOrModeChanged(startState: EditorState, state: EditorState) {
+  return (
+    // The parser works in the background on long documents; redraw as it
+    // reaches more of the text instead of waiting for the next edit.
+    syntaxTree(startState) !== syntaxTree(state) ||
+    isReadingMode(startState) !== isReadingMode(state)
+  );
+}
+
+function selectionRevealKey(state: EditorState) {
+  return selectionRevealedBlocks(state)
+    .map((block) => `${block.from}-${block.to}`)
+    .join(",");
+}
+
+const blockPreviewField = StateField.define<{
+  decorations: DecorationSet;
+  revealKey: string;
+}>({
   create(state) {
-    return buildLivePreviewDecorations(state);
+    return {
+      decorations: buildBlockDecorations(state),
+      revealKey: selectionRevealKey(state),
+    };
   },
-  update(decorations, transaction) {
+  update(value, transaction) {
+    const { state } = transaction;
+
     if (
       transaction.docChanged ||
-      transaction.selection ||
-      transaction.effects.some((effect) => effect.is(setSearchQuery)) ||
-      searchPanelOpen(transaction.startState) !== searchPanelOpen(transaction.state) ||
-      isReadingMode(transaction.startState) !== isReadingMode(transaction.state)
+      searchStateChanged(transaction) ||
+      treeOrModeChanged(transaction.startState, state)
     ) {
-      return buildLivePreviewDecorations(transaction.state);
+      return {
+        decorations: buildBlockDecorations(state),
+        revealKey: selectionRevealKey(state),
+      };
     }
 
-    return decorations.map(transaction.changes);
+    if (transaction.selection) {
+      const revealKey = selectionRevealKey(state);
+
+      // Most caret moves change nothing here; only entering or leaving a
+      // block (or, while searching, the selected match) does.
+      if (revealKey !== value.revealKey || searchPanelOpen(state)) {
+        return { decorations: buildBlockDecorations(state), revealKey };
+      }
+    }
+
+    return value;
   },
   provide(field) {
-    return EditorView.decorations.from(field);
+    return EditorView.decorations.from(field, (value) => value.decorations);
   },
 });
 
+const inlinePreviewPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildInlineDecorations(
+        view.state,
+        view.viewport.from,
+        view.viewport.to,
+      );
+    }
+
+    update(update: ViewUpdate) {
+      if (
+        update.docChanged ||
+        update.viewportChanged ||
+        update.selectionSet ||
+        update.transactions.some(searchStateChanged) ||
+        treeOrModeChanged(update.startState, update.state)
+      ) {
+        this.decorations = buildInlineDecorations(
+          update.state,
+          update.view.viewport.from,
+          update.view.viewport.to,
+        );
+      }
+    }
+  },
+  {
+    decorations: (plugin) => plugin.decorations,
+  },
+);
+
 export const livePreview = [
-  livePreviewField,
+  blockPreviewField,
+  inlinePreviewPlugin,
   readingModeChangeGuard,
   sourceLineNavigation,
   structuralSourceLineMouseDownHandler,

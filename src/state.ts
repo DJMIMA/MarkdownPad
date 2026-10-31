@@ -125,12 +125,22 @@ export function lineEndingLabel(lineEnding: LineEnding | undefined) {
 
 export function positionToLineColumn(content: string, offset: number) {
   const safeOffset = Math.min(Math.max(offset, 0), content.length);
-  const beforeCursor = content.slice(0, safeOffset);
-  const lines = beforeCursor.split("\n");
+  let line = 1;
+  let lineStart = 0;
+
+  // Count line breaks without copying the text (runs on every caret move).
+  for (
+    let index = content.indexOf("\n");
+    index !== -1 && index < safeOffset;
+    index = content.indexOf("\n", index + 1)
+  ) {
+    line += 1;
+    lineStart = index + 1;
+  }
 
   return {
-    line: lines.length,
-    column: lines[lines.length - 1].length + 1,
+    line,
+    column: safeOffset - lineStart + 1,
   };
 }
 

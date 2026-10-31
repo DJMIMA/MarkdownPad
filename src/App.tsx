@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   MarkdownEditor,
   type MarkdownEditorHandle,
@@ -181,15 +188,19 @@ function App() {
   );
   const showFallbackMenu = !isTauriRuntime();
 
-  const status = useMemo(() => {
-    const cursor = positionToLineColumn(activeTab.content, activeTab.cursor.head);
-
-    return {
-      ...cursor,
-      characters: activeTab.content.length,
-      words: countWords(activeTab.content),
-    };
-  }, [activeTab.content, activeTab.cursor.head]);
+  const cursorPosition = useMemo(
+    () => positionToLineColumn(activeTab.content, activeTab.cursor.head),
+    [activeTab.content, activeTab.cursor.head],
+  );
+  // Counting words scans the whole text; let React do it after the keystroke
+  // has been drawn instead of before.
+  const deferredContent = useDeferredValue(activeTab.content);
+  const wordCount = useMemo(() => countWords(deferredContent), [deferredContent]);
+  const status = {
+    ...cursorPosition,
+    characters: activeTab.content.length,
+    words: wordCount,
+  };
 
   const applyTabs = useCallback(
     (update: (current: DocumentTab[]) => DocumentTab[]) => {
