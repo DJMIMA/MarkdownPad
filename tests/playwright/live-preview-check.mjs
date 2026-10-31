@@ -884,7 +884,7 @@ async function run() {
     );
     assert.equal(afterHeavyTableLastLineBottomClick.selected, "");
     // Only the line is checked: with a wide fallback font the source row wraps
-    // inside the readable column, so the click lands on the wrapped tail and
+    // inside the editor width, so the click lands on the wrapped tail and
     // the column depends on the installed fonts.
     assert.match(
       afterHeavyTableLastLineBottomClick.status[1] ?? "",
