@@ -105,9 +105,12 @@ function App() {
   const [settings, setSettings] = useState<EditorSettings>(
     defaultEditorSettings,
   );
-  // Reading mode is a view state of this window, like the open menu: it is not
-  // part of EditorSettings, so the recovery snapshot keeps its shape.
-  const [readingMode, setReadingMode] = useState(false);
+  // Reading mode is a per-tab view state. It is kept beside the tabs rather
+  // than in DocumentTab or EditorSettings, so the recovery snapshot keeps its
+  // shape (and a restored session opens in editing mode).
+  const [readingTabIds, setReadingTabIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [unsavedDialog, setUnsavedDialog] =
@@ -117,6 +120,7 @@ function App() {
   const { resolvedTheme, toggleTheme } = useTheme();
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
+  const readingMode = readingTabIds.has(activeTab.id);
   const nextUntitledIndex = tabs.filter((tab) => tab.isUntitled).length + 1;
   const groups = useMemo(
     () => menuGroups(settings, { readingMode }),
@@ -146,8 +150,6 @@ function App() {
 
     setTabs((currentTabs) => [...currentTabs, tab]);
     setActiveTabId(tab.id);
-    // A new empty tab is meant for writing; there is nothing to read in it.
-    setReadingMode(false);
   }, [nextUntitledIndex]);
 
   const requestUnsavedDecision = useCallback((tabsToClose: DocumentTab[]) => {
@@ -406,7 +408,10 @@ function App() {
           editorRef.current?.openSearch();
           break;
         case "replace":
-          editorRef.current?.openReplace();
+          // Reading mode cannot replace text, so Ctrl+H does nothing there.
+          if (!readingMode) {
+            editorRef.current?.openReplace();
+          }
           break;
         case "select-all":
           editorRef.current?.selectAll();
@@ -430,7 +435,15 @@ function App() {
           }));
           break;
         case "toggle-reading-mode":
-          setReadingMode((current) => !current);
+          setReadingTabIds((current) => {
+            const next = new Set(current);
+
+            if (!next.delete(activeTab.id)) {
+              next.add(activeTab.id);
+            }
+
+            return next;
+          });
           break;
         case "toggle-word-wrap":
           setSettings((current) => ({
@@ -597,6 +610,16 @@ function App() {
       unlisten?.();
     };
   }, []);
+
+  // Forget closed (or replaced) tabs so their ids do not pile up.
+  useEffect(() => {
+    setReadingTabIds((current) => {
+      const openIds = new Set(tabs.map((tab) => tab.id));
+      const kept = [...current].filter((id) => openIds.has(id));
+
+      return kept.length === current.size ? current : new Set(kept);
+    });
+  }, [tabs]);
 
   const viewMenuStateRef = useRef({
     readingMode,

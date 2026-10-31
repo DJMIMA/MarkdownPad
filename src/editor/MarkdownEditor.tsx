@@ -97,11 +97,6 @@ function openMarkdownPadSearchPanel(
   view: EditorView,
   mode: SearchPanelMode,
 ) {
-  // Reading mode cannot replace text, so Ctrl+H only opens the search row.
-  if (view.state.readOnly) {
-    mode = "search";
-  }
-
   applySearchPanelMode(view, mode);
   openSearchPanel(view);
   applySearchPanelMode(view, mode);

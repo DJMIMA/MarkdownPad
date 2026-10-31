@@ -1,6 +1,6 @@
 // Reading mode (表示 > リーディングモード, Ctrl+E): the whole document stays
-// rendered wherever the user clicks, nothing can be typed or deleted, and
-// leaving the mode restores normal live-preview editing.
+// rendered wherever the user clicks, nothing can be typed or deleted, the mode
+// belongs to each tab, and leaving it restores normal live-preview editing.
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
 
@@ -117,13 +117,28 @@ try {
   info = await editorInfo();
   assert.equal(info.doc, sampleMarkdown, "reading mode never changes the text");
 
-  // Ctrl+H opens search only: no replace row in reading mode.
+  // Ctrl+H (replace) does nothing in reading mode: not even the search panel.
   await page.keyboard.press("Control+H");
+  await page.waitForTimeout(200);
+  assert.equal(
+    await page.locator(".cm-md-search-panel").count(),
+    0,
+    "Ctrl+H opens no panel in reading mode",
+  );
+
+  // Ctrl+F still searches, with no way into the replace row.
+  await page.keyboard.press("Control+F");
   await page.waitForSelector(".cm-md-search-panel");
-  const replaceRowVisible = await page
-    .locator(".cm-md-replace-row")
-    .isVisible();
-  assert.equal(replaceRowVisible, false, "no replace row in reading mode");
+  assert.equal(
+    await page.locator(".cm-md-replace-row").isVisible(),
+    false,
+    "no replace row in reading mode",
+  );
+  assert.equal(
+    await page.locator(".cm-md-search-mode-toggle").isVisible(),
+    false,
+    "no replace toggle in reading mode",
+  );
   await page.keyboard.insertText("needle");
   await page.waitForTimeout(200);
   assert.ok(
@@ -174,11 +189,38 @@ try {
   );
   await page.keyboard.press("Escape");
 
-  // A new tab is for writing, so it leaves reading mode.
+  // Reading mode belongs to the tab: a new tab opens in editing mode, and
+  // switching tabs switches the mode with them.
   await page.keyboard.press("Control+N");
   await page.waitForTimeout(200);
   info = await editorInfo();
   assert.equal(info.reading, false, "a new tab opens in editing mode");
+  await page.keyboard.insertText("second tab");
+  await page.waitForTimeout(200);
+
+  const selectTab = async (index) => {
+    await page.locator(".tab-button").nth(index).click();
+    await page.waitForTimeout(300);
+    return editorInfo();
+  };
+
+  info = await selectTab(0);
+  assert.equal(info.reading, true, "the first tab is still in reading mode");
+  assert.equal(info.doc, sampleMarkdown, "the first tab shows its own text");
+  assert.match(info.statusBar, /リーディングモード/);
+
+  info = await selectTab(1);
+  assert.equal(info.reading, false, "the second tab stays in editing mode");
+  assert.equal(info.doc, "second tab", "the second tab shows its own text");
+  assert.equal(info.editable, "true");
+  assert.doesNotMatch(info.statusBar, /リーディングモード/);
+  await page.click(".menu-root-button >> text=表示");
+  assert.doesNotMatch(
+    await page.locator(".menu-item", { hasText: "リーディングモード" }).textContent(),
+    /✓/,
+    "the menu check follows the active tab",
+  );
+  await page.keyboard.press("Escape");
 
   assert.deepEqual(consoleErrors, []);
   console.log("PASS: reading mode keeps blocks rendered and blocks edits");
