@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chromium } from "playwright";
+import { launchBrowser } from "./launch.mjs";
 
 const baseUrl = process.env.MARKDOWNPAD_URL ?? "http://127.0.0.1:1420";
 const blankUrl = new URL("?blank=1", baseUrl).toString();
@@ -10,13 +10,17 @@ Visit https://example.com and [site](https://example.com).
 | A | B |
 |---|---|
 | 1 | 2 |
+
+- [x] 済み
+- [ ] 未完了
+
+<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" onerror="window.__xss = 1">
+<script>window.__xss = 2</script>
+<iframe src="about:blank"></iframe>
 `;
 
 async function run() {
-  const browser = await chromium.launch({
-    channel: "chrome",
-    headless: true,
-  });
+  const browser = await launchBrowser();
 
   try {
     const context = await browser.newContext({
@@ -101,6 +105,22 @@ async function run() {
     ]);
     assert.match(metrics.tableText ?? "", /A\s+B\s+1\s+2/);
     assert.equal(metrics.printCalls, 1);
+
+    // Raw HTML is sanitized in the real print window.
+    const safety = await printPage.evaluate(() => ({
+      xss: window.__xss ?? null,
+      scripts: document.querySelectorAll(".markdown-print-document script").length,
+      iframes: document.querySelectorAll(".markdown-print-document iframe").length,
+      onerror: document.querySelector(".markdown-print-document img")?.getAttribute("onerror") ?? null,
+      taskBoxes: [...document.querySelectorAll(".task-box")].map((box) => box.textContent),
+    }));
+    assert.deepEqual(safety, {
+      xss: null,
+      scripts: 0,
+      iframes: 0,
+      onerror: null,
+      taskBoxes: ["☑", "☐"],
+    });
     assert.deepEqual(consoleErrors, []);
 
     console.log(JSON.stringify(metrics, null, 2));

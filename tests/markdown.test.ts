@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   markdownPrintDocument,
   markdownPrintDocumentHtml,
+  markdownToSafeHtml,
 } from "../src/markdown.ts";
 
 test("markdownPrintDocument renders explicit links without linkifying bare URLs", () => {
@@ -29,4 +30,33 @@ test("markdownPrintDocumentHtml wraps print content in the print document shell"
   assert.match(html, /<title>A &lt;B&gt;<\/title>/);
   assert.match(html, /<main class="markdown-print-document">/);
   assert.match(html, /<h1>Title<\/h1>/);
+});
+
+test("task list items print as check boxes", () => {
+  const html = markdownToSafeHtml("- [x] 完了\n- [ ] 未完了\n- 普通");
+
+  assert.match(html, /<li class="task-list-item"><span class="task-box checked" aria-hidden="true">☑<\/span> 完了<\/li>/);
+  assert.match(html, /<li class="task-list-item"><span class="task-box" aria-hidden="true">☐<\/span> 未完了<\/li>/);
+  assert.match(html, /<li>普通<\/li>/);
+});
+
+test("printing keeps punctuation as typed", () => {
+  assert.match(markdownToSafeHtml('"quote" (c) -- ...'), /&quot;quote&quot; \(c\) -- \.\.\./);
+});
+
+test("image sources go through the resolver", () => {
+  const html = markdownToSafeHtml("![猫](images/cat.png)\n\n![x](javascript:alert(1))", (source) =>
+    source.startsWith("images/") ? `http://asset.localhost/${source}` : null,
+  );
+
+  assert.match(html, /<img src="http:\/\/asset\.localhost\/images\/cat\.png" alt="猫">/);
+  assert.doesNotMatch(html, /<img src="javascript/);
+});
+
+test("without a DOM to sanitize in, raw HTML is escaped instead of passed through", () => {
+  // Node has no DOM, so DOMPurify cannot run here: the output must still be safe.
+  const html = markdownToSafeHtml('<img src=x onerror="alert(1)">\n\n<script>alert(2)</script>');
+
+  assert.doesNotMatch(html, /<img|<script/);
+  assert.match(html, /&lt;script&gt;/);
 });

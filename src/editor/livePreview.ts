@@ -5,12 +5,14 @@ import {
   SearchQuery,
   setSearchQuery,
 } from "@codemirror/search";
-import type { Range } from "@codemirror/state";
+import type { Range, Text } from "@codemirror/state";
 import {
   EditorSelection,
   EditorState,
+  Facet,
   RangeSetBuilder,
   StateField,
+  type Transaction,
 } from "@codemirror/state";
 import {
   Decoration,
@@ -18,6 +20,7 @@ import {
   WidgetType,
   EditorView,
   ViewPlugin,
+  type ViewUpdate,
 } from "@codemirror/view";
 import type { SyntaxNode, SyntaxNodeRef } from "@lezer/common";
 // The explicit extension lets `node --test` load this module directly.
@@ -26,10 +29,6 @@ import { isReadingMode, readingModeChangeGuard } from "./readingMode.ts";
 type SourceRange = {
   from: number;
   to: number;
-};
-
-type TableCellSource = SourceRange & {
-  text: string;
 };
 
 type TableCellPosition = {
@@ -44,6 +43,9 @@ type SelectedTableCell = TableCellPosition &
 
 type TableCellSelection = {
   wrapper: HTMLElement;
+  // The document the cell offsets belong to. Any edit or tab switch makes a
+  // new document, and the stored offsets must then never be used again.
+  doc?: Text;
   rowFrom: number;
   rowTo: number;
   columnFrom: number;
@@ -139,6 +141,43 @@ function rangesIntersect(first: SourceRange, second: SourceRange) {
   return first.from <= second.to && second.from <= first.to;
 }
 
+// Structural blocks (tables, code blocks, rules) that contain `position`,
+// found by walking up from the position instead of scanning the whole tree.
+function structuralBlocksAt(state: EditorState, position: number): SourceRange[] {
+  const tree = syntaxTree(state);
+  const blocks: SourceRange[] = [];
+
+  for (const side of [-1, 1] as const) {
+    for (
+      let node: SyntaxNode | null = tree.resolveInner(position, side);
+      node;
+      node = node.parent
+    ) {
+      if (
+        isStructuralBlock(node.name) &&
+        rangeContainsPosition(node, position) &&
+        !blocks.some((block) => block.from === node!.from && block.to === node!.to)
+      ) {
+        blocks.push({ from: node.from, to: node.to });
+      }
+    }
+  }
+
+  return blocks;
+}
+
+// Blocks whose source an empty selection reveals. (Reading mode reveals
+// nothing.)
+function selectionRevealedBlocks(state: EditorState): SourceRange[] {
+  if (isReadingMode(state)) {
+    return [];
+  }
+
+  return state.selection.ranges
+    .filter((range) => range.empty)
+    .flatMap((range) => structuralBlocksAt(state, range.head));
+}
+
 function sourceRangesForSelection(state: EditorState): SourceRanges {
   const ranges: SourceRanges = {
     all: [],
@@ -150,39 +189,19 @@ function sourceRangesForSelection(state: EditorState): SourceRanges {
     return ranges;
   }
 
-  const tree = syntaxTree(state);
-
   for (const selectionRange of state.selection.ranges) {
-    const from = Math.min(selectionRange.from, selectionRange.to);
-    const to = Math.max(selectionRange.from, selectionRange.to);
-    const startLine = state.doc.lineAt(from);
-    const endLine = state.doc.lineAt(to);
+    const startLine = state.doc.lineAt(selectionRange.from);
+    const endLine = state.doc.lineAt(selectionRange.to);
 
     ranges.all.push({
       from: startLine.from,
       to: endLine.to,
     });
+  }
 
-    tree.iterate({
-      enter(node) {
-        if (!isStructuralBlock(node.name)) {
-          return;
-        }
-
-        if (
-          selectionRange.empty &&
-          rangeContainsPosition({ from: node.from, to: node.to }, selectionRange.head)
-        ) {
-          const structuralRange = {
-            from: node.from,
-            to: node.to,
-          };
-
-          ranges.all.push(structuralRange);
-          ranges.structural.push(structuralRange);
-        }
-      },
-    });
+  for (const block of selectionRevealedBlocks(state)) {
+    ranges.all.push(block);
+    ranges.structural.push(block);
   }
 
   return ranges;
@@ -197,13 +216,15 @@ type HighlightSegment = {
 export function searchMatchRanges(
   state: EditorState,
   query: SearchQuery,
+  from?: number,
+  to?: number,
 ): SourceRange[] {
   if (!query.search || !query.valid) {
     return [];
   }
 
   const ranges: SourceRange[] = [];
-  const cursor = query.getCursor(state);
+  const cursor = query.getCursor(state, from, to);
 
   for (let next = cursor.next(); !next.done; next = cursor.next()) {
     if (next.value.to > next.value.from) {
@@ -217,44 +238,56 @@ export function searchMatchRanges(
   return ranges;
 }
 
-function activeSearchMatches(state: EditorState): SourceRange[] {
-  if (!searchPanelOpen(state)) {
-    return [];
-  }
-
-  return searchMatchRanges(state, getSearchQuery(state));
+interface StructuralBlock extends SourceRange {
+  name: string;
+  node: SyntaxNode;
+  /** The block shows its Markdown source instead of a rendered widget. */
+  revealed: boolean;
+  /** Search matches inside the block, while the search panel is open. */
+  matches: SourceRange[];
 }
 
-// Horizontal rules render as an <hr> with no text, so a match inside `---` can
-// only be shown by revealing its source. Tables and code blocks keep their
-// rendering and highlight matches in place instead.
-function horizontalRuleMatchRanges(
-  state: EditorState,
-  matches: SourceRange[],
-): SourceRange[] {
-  if (matches.length === 0) {
-    return [];
-  }
+// Tables, code blocks and rules overlapping from..to. Paragraphs and headings
+// cannot contain blocks, so their inline content is never walked.
+function structuralBlocks(state: EditorState, from: number, to: number): StructuralBlock[] {
+  const query = searchPanelOpen(state) ? getSearchQuery(state) : null;
+  const revealedBySelection = selectionRevealedBlocks(state);
+  const blocks: StructuralBlock[] = [];
 
-  const tree = syntaxTree(state);
-  const ranges: SourceRange[] = [];
-
-  tree.iterate({
+  syntaxTree(state).iterate({
+    from,
+    to,
     enter(node) {
-      if (node.name !== "HorizontalRule") {
-        return;
-      }
+      if (isStructuralBlock(node.name)) {
+        const matches = query ? searchMatchRanges(state, query, node.from, node.to) : [];
+        // A rule has no text to highlight a match in, so a match shows its
+        // `---` source instead (also in reading mode).
+        const revealed =
+          revealedBySelection.some(
+            (block) => block.from === node.from && block.to === node.to,
+          ) ||
+          (node.name === "HorizontalRule" && matches.length > 0);
 
-      if (matches.some((match) => match.from < node.to && node.from < match.to)) {
-        ranges.push({
+        blocks.push({
+          name: node.name,
+          node: node.node,
           from: node.from,
           to: node.to,
+          revealed,
+          matches,
         });
+        return false;
       }
+
+      if (node.name === "Paragraph" || /^(ATX|Setext)Heading/.test(node.name)) {
+        return false;
+      }
+
+      return undefined;
     },
   });
 
-  return ranges;
+  return blocks;
 }
 
 // Split a run of widget text (a table cell or code body) into plain and
@@ -573,7 +606,7 @@ function clampMenuPosition(value: number, size: number, max: number) {
   return Math.max(6, Math.min(value, Math.max(6, max - size - 6)));
 }
 
-async function writeClipboardText(text: string) {
+export async function writeClipboardText(text: string) {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
@@ -609,13 +642,29 @@ async function copyTableCellSelection(view: EditorView) {
   return writeClipboardText(tableCellSelectionText(selection));
 }
 
-async function cutTableCellSelection(view: EditorView) {
-  if (!(await copyTableCellSelection(view))) {
+/** Text of the selected table cells (tab and line separated), if any. */
+export function selectedTableCellsText(view: EditorView) {
+  const selection = tableCellSelections.get(view);
+  return selection ? tableCellSelectionText(selection) : null;
+}
+
+/** Lets pasted text replace the first selected cell, if cells are selected. */
+export function prepareTableCellsForPaste(view: EditorView) {
+  if (tableCellSelections.has(view)) {
+    beginEditingSelectedCell(view, true);
+  }
+}
+
+export async function cutTableCellSelection(view: EditorView) {
+  // Hold on to the selection: the clipboard fallback briefly moves the focus
+  // away, which clears the live selection before the copy finishes.
+  const selection = tableCellSelections.get(view);
+
+  if (!selection || !(await writeClipboardText(tableCellSelectionText(selection)))) {
     return false;
   }
 
-  deleteTableCellSelection(view);
-  return true;
+  return deleteTableCellSelection(view, selection);
 }
 
 function showTableCellSelectionMenu(
@@ -700,7 +749,7 @@ function setTableCellSelection(
     clearTableCellSelection(view);
   }
 
-  tableCellSelections.set(view, selection);
+  tableCellSelections.set(view, { ...selection, doc: view.state.doc });
 
   if (options.menuAnchor) {
     showTableCellSelectionMenu(view, selection, options.menuAnchor);
@@ -747,10 +796,17 @@ function tableCellSelectionText(selection: TableCellSelection) {
   return rows.join("\n");
 }
 
-function deleteTableCellSelection(view: EditorView) {
-  const selection = tableCellSelections.get(view);
-
+function deleteTableCellSelection(
+  view: EditorView,
+  selection = tableCellSelections.get(view),
+) {
   if (!selection) {
+    return false;
+  }
+
+  // Offsets taken from an older document would delete unrelated text.
+  if (selection.doc !== view.state.doc || isReadingMode(view.state)) {
+    clearTableCellSelection(view);
     return false;
   }
 
@@ -781,6 +837,50 @@ function deleteTableCellSelection(view: EditorView) {
   });
   view.focus();
   return true;
+}
+
+// A key pressed (or text pasted) while cells are selected acts on the first
+// selected cell: typed or pasted text replaces its content, other keys start
+// from the end of it. The caret must be a plain cursor, since only an empty
+// selection reveals the table source that the browser can put text into.
+function beginEditingSelectedCell(view: EditorView, replaceContent: boolean) {
+  const selection = tableCellSelections.get(view);
+
+  if (!selection) {
+    return;
+  }
+
+  const cell = selection.doc === view.state.doc
+    ? [...selection.cells]
+        .filter((candidate) =>
+          Number.isFinite(candidate.from) &&
+          Number.isFinite(candidate.to) &&
+          candidate.from <= candidate.to,
+        )
+        .sort((first, second) => first.row - second.row || first.column - second.column)[0]
+    : undefined;
+
+  clearTableCellSelection(view);
+
+  if (!cell) {
+    return;
+  }
+
+  if (replaceContent && cell.to > cell.from) {
+    view.dispatch({
+      changes: { from: cell.from, to: cell.to, insert: "" },
+      selection: EditorSelection.cursor(cell.from),
+      scrollIntoView: true,
+      userEvent: "delete.tableCell",
+    });
+    return;
+  }
+
+  view.dispatch({
+    selection: EditorSelection.cursor(replaceContent ? cell.from : cell.to),
+    scrollIntoView: true,
+    userEvent: "select",
+  });
 }
 
 const linkClickHandler = EditorView.domEventHandlers({
@@ -1146,6 +1246,30 @@ const visualLineClickHandler = EditorView.domEventHandlers({
   },
 });
 
+function lineTouchesStructuralBlock(state: EditorState, lineNumber: number) {
+  const line = state.doc.line(lineNumber);
+  let found = false;
+
+  syntaxTree(state).iterate({
+    from: line.from,
+    to: line.to,
+    enter(node) {
+      if (isStructuralBlock(node.name)) {
+        found = true;
+      }
+
+      return !found;
+    },
+  });
+
+  return found;
+}
+
+// Up / Down normally move by visual line, as in any editor, so the caret can
+// walk through a wrapped paragraph. Only a move into, out of or within a
+// table, code block or rule goes by source line: those blocks switch between
+// a rendered widget and their source, and CodeMirror's coordinate-based
+// motion would jump past them.
 function moveBySourceLine(view: EditorView, direction: "down" | "up") {
   const selection = view.state.selection.main;
 
@@ -1159,6 +1283,24 @@ function moveBySourceLine(view: EditorView, direction: "down" | "up") {
     : line.number - 1;
 
   if (targetLineNumber < 1 || targetLineNumber > view.state.doc.lines) {
+    return false;
+  }
+
+  const visualMove = view.moveVertically(selection, direction === "down");
+
+  if (
+    visualMove.head !== selection.head &&
+    visualMove.head >= line.from &&
+    visualMove.head <= line.to
+  ) {
+    // Still inside the same (wrapped) line.
+    return false;
+  }
+
+  if (
+    !lineTouchesStructuralBlock(view.state, line.number) &&
+    !lineTouchesStructuralBlock(view.state, targetLineNumber)
+  ) {
     return false;
   }
 
@@ -1200,7 +1342,20 @@ const sourceLineNavigation = ViewPlugin.fromClass(
       event.clipboardData.setData("text/plain", tableCellSelectionText(selection));
       event.preventDefault();
       event.stopImmediatePropagation();
-      deleteTableCellSelection(this.view);
+      deleteTableCellSelection(this.view, selection);
+    };
+
+    private readonly handlePaste = () => {
+      if (tableCellSelections.has(this.view) && !isReadingMode(this.view.state)) {
+        // CodeMirror's own paste handler runs next and inserts at the new
+        // caret, i.e. into the first selected cell.
+        beginEditingSelectedCell(this.view, true);
+      }
+    };
+
+    // The cell menu is positioned once; drop it when the text scrolls away.
+    private readonly handleScroll = () => {
+      removeTableCellSelectionMenu(this.view);
     };
 
     private readonly handleKeyDown = (event: KeyboardEvent) => {
@@ -1220,10 +1375,36 @@ const sourceLineNavigation = ViewPlugin.fromClass(
           event.stopImmediatePropagation();
           return;
         }
+
+        if (["Shift", "Control", "Alt", "Meta", "CapsLock"].includes(event.key)) {
+          return;
+        }
+
+        if (event.ctrlKey || event.metaKey || isReadingMode(this.view.state)) {
+          // Copy, cut and paste use the cell selection (see the clipboard
+          // handlers); any other shortcut works on the normal selection.
+          if (!["c", "x", "v", "insert"].includes(event.key.toLowerCase())) {
+            clearTableCellSelection(this.view);
+          }
+
+          return;
+        }
+
+        const typesText =
+          !event.altKey &&
+          (event.key.length === 1 || event.key === "Process" || event.isComposing);
+
+        // The key itself goes through and acts at the new caret.
+        beginEditingSelectedCell(this.view, typesText);
+
+        if (typesText) {
+          return;
+        }
       }
 
       if (
         event.defaultPrevented ||
+        event.isComposing ||
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||
@@ -1251,123 +1432,309 @@ const sourceLineNavigation = ViewPlugin.fromClass(
       this.view = view;
       this.view.contentDOM.addEventListener("copy", this.handleCopy, true);
       this.view.contentDOM.addEventListener("cut", this.handleCut, true);
+      this.view.contentDOM.addEventListener("paste", this.handlePaste, true);
       this.view.contentDOM.addEventListener("keydown", this.handleKeyDown, true);
+      this.view.scrollDOM.addEventListener("scroll", this.handleScroll);
+    }
+
+    update(update: ViewUpdate) {
+      if (!tableCellSelections.has(update.view) && !tableCellSelectionMenus.has(update.view)) {
+        return;
+      }
+
+      // A cell selection only describes the document it was made in, and its
+      // menu only makes sense while the editor has the focus.
+      // Selection changes made by code (such as Select All from the menu)
+      // replace the cell selection too; the ones CodeMirror reads from the
+      // DOM while cells are dragged over carry the "select" user event.
+      const programmaticSelection =
+        update.selectionSet &&
+        !update.transactions.some((transaction) => transaction.isUserEvent("select"));
+
+      if (
+        update.docChanged ||
+        programmaticSelection ||
+        (update.focusChanged && !update.view.hasFocus)
+      ) {
+        clearTableCellSelection(update.view);
+      }
     }
 
     destroy() {
+      // Runs when the editor is torn down or another tab's state is shown.
+      clearTableCellSelection(this.view);
       this.view.contentDOM.removeEventListener("copy", this.handleCopy, true);
       this.view.contentDOM.removeEventListener("cut", this.handleCut, true);
+      this.view.contentDOM.removeEventListener("paste", this.handlePaste, true);
       this.view.contentDOM.removeEventListener("keydown", this.handleKeyDown, true);
+      this.view.scrollDOM.removeEventListener("scroll", this.handleScroll);
     }
   },
 );
 
-function parseCodeFence(markdown: string) {
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
-  const firstLine = lines[0] ?? "";
-  const language = firstLine.replace(/^(```+|~~~+)/, "").trim();
-  const body = lines.length > 2 ? lines.slice(1, -1).join("\n") : "";
+type InlineStyle = "strong" | "em" | "del" | "code";
 
-  return {
-    language,
-    body,
-  };
+/** A piece of rendered cell text with its source position and styling. */
+export interface InlineRun {
+  from: number;
+  to: number;
+  text: string;
+  styles: InlineStyle[];
+  url: string | null;
 }
 
-function trimCellSource(line: string, from: number, to: number) {
-  let cellFrom = from;
-  let cellTo = to;
+export type TableAlignment = "left" | "center" | "right" | null;
 
-  while (cellFrom < cellTo && /\s/.test(line[cellFrom] ?? "")) {
-    cellFrom += 1;
-  }
-
-  while (cellTo > cellFrom && /\s/.test(line[cellTo - 1] ?? "")) {
-    cellTo -= 1;
-  }
-
-  return {
-    from: cellFrom,
-    to: cellTo,
-    text: line.slice(cellFrom, cellTo),
-  };
+export interface TableCellModel {
+  from: number;
+  to: number;
+  runs: InlineRun[];
 }
 
-function splitTableRowWithSource(line: string, lineStart: number) {
-  const segments: SourceRange[] = [];
-  let segmentStart = 0;
+export interface TableModel {
+  alignments: TableAlignment[];
+  header: TableCellModel[];
+  rows: TableCellModel[][];
+}
 
-  for (let index = 0; index < line.length; index += 1) {
-    if (line[index] === "|") {
-      segments.push({
-        from: segmentStart,
-        to: index,
-      });
-      segmentStart = index + 1;
+const inlineStyleForNode: Record<string, InlineStyle> = {
+  StrongEmphasis: "strong",
+  Emphasis: "em",
+  Strikethrough: "del",
+  InlineCode: "code",
+};
+
+/**
+ * Splits the inline Markdown in from..to into rendered runs: emphasis,
+ * strike-through, code and links keep their meaning, their marks and URLs
+ * are dropped, and escapes show only the escaped character.
+ */
+export function inlineRuns(state: EditorState, from: number, to: number): InlineRun[] {
+  const hidden: SourceRange[] = [];
+  const styled: Array<SourceRange & { style?: InlineStyle; url?: string }> = [];
+
+  syntaxTree(state).iterate({
+    from,
+    to,
+    enter(node) {
+      if (node.from < from || node.to > to) {
+        return;
+      }
+
+      const style = inlineStyleForNode[node.name];
+
+      if (style) {
+        styled.push({ from: node.from, to: node.to, style });
+
+        // Inside a table, `\|` in code is the escape for a literal pipe.
+        if (style === "code") {
+          const text = state.doc.sliceString(node.from, node.to);
+
+          for (let index = text.indexOf("\\|"); index >= 0; index = text.indexOf("\\|", index + 2)) {
+            hidden.push({ from: node.from + index, to: node.from + index + 1 });
+          }
+        }
+      } else if (node.name === "Link") {
+        const url = urlTextForNode(state, node.node);
+
+        if (url) {
+          styled.push({ from: node.from, to: node.to, url });
+        }
+      } else if (
+        node.name === "EmphasisMark" ||
+        node.name === "StrikethroughMark" ||
+        node.name === "CodeMark" ||
+        node.name === "LinkMark" ||
+        node.name === "LinkTitle" ||
+        (node.name === "URL" &&
+          (node.node.parent?.name === "Link" || node.node.parent?.name === "Image"))
+      ) {
+        hidden.push({ from: node.from, to: node.to });
+      } else if (node.name === "Escape") {
+        hidden.push({ from: node.from, to: node.from + 1 });
+      }
+    },
+  });
+
+  const boundaries = new Set<number>([from, to]);
+
+  for (const range of [...hidden, ...styled]) {
+    boundaries.add(Math.max(from, range.from));
+    boundaries.add(Math.min(to, range.to));
+  }
+
+  const points = [...boundaries].sort((first, second) => first - second);
+  const runs: InlineRun[] = [];
+
+  for (let index = 0; index + 1 < points.length; index += 1) {
+    const runFrom = points[index];
+    const runTo = points[index + 1];
+
+    if (
+      runTo <= runFrom ||
+      hidden.some((range) => range.from <= runFrom && runTo <= range.to)
+    ) {
+      continue;
     }
+
+    const covering = styled.filter((range) => range.from <= runFrom && runTo <= range.to);
+    const styles = (["strong", "em", "del", "code"] as const).filter((style) =>
+      covering.some((range) => range.style === style),
+    );
+    const url = covering.find((range) => range.url)?.url ?? null;
+    const previous = runs[runs.length - 1];
+
+    if (
+      previous &&
+      previous.to === runFrom &&
+      previous.url === url &&
+      previous.styles.join() === styles.join()
+    ) {
+      previous.to = runTo;
+      previous.text += state.doc.sliceString(runFrom, runTo);
+      continue;
+    }
+
+    runs.push({
+      from: runFrom,
+      to: runTo,
+      text: state.doc.sliceString(runFrom, runTo),
+      styles: [...styles],
+      url,
+    });
   }
 
-  segments.push({
-    from: segmentStart,
-    to: line.length,
-  });
+  return runs;
+}
 
-  if (line.trimStart().startsWith("|")) {
-    segments.shift();
-  }
+function tableAlignments(delimiterRow: string): TableAlignment[] {
+  const cells = delimiterRow.trim().replace(/^\|/, "").replace(/\|$/, "").split("|");
 
-  if (line.trimEnd().endsWith("|")) {
-    segments.pop();
-  }
+  return cells.map((cell) => {
+    const spec = cell.trim();
+    const left = spec.startsWith(":");
+    const right = spec.endsWith(":") && spec.length > 1;
 
-  return segments.map((segment) => {
-    const cell = trimCellSource(line, segment.from, segment.to);
+    if (left && right) {
+      return "center";
+    }
 
-    return {
-      from: lineStart + cell.from,
-      to: lineStart + cell.to,
-      text: cell.text,
-    };
+    return right ? "right" : left ? "left" : null;
   });
 }
 
-function sourceLines(markdown: string) {
-  const normalized = markdown.replace(/\r\n/g, "\n");
-  const lines = normalized.split("\n");
-  let offset = 0;
+/**
+ * Reads a GFM table from the syntax tree. Lezer leaves out empty cells, so
+ * columns are counted from the pipes; rows are padded or cut to the header's
+ * column count, as GFM renders them.
+ */
+export function tableModel(state: EditorState, table: SyntaxNode): TableModel {
+  let alignments: TableAlignment[] = [];
+  const rows: TableCellModel[][] = [];
 
-  return lines.map((line) => {
-    const sourceLine = {
-      text: line,
-      from: offset,
-    };
-    offset += line.length + 1;
-    return sourceLine;
-  });
-}
+  for (let row = table.firstChild; row; row = row.nextSibling) {
+    if (row.name === "TableDelimiter") {
+      alignments = tableAlignments(state.doc.sliceString(row.from, row.to));
+      continue;
+    }
 
-function parseMarkdownTable(markdown: string) {
-  const lines = sourceLines(markdown).filter((line) => line.text.trim());
+    if (row.name !== "TableHeader" && row.name !== "TableRow") {
+      continue;
+    }
 
-  if (lines.length < 2) {
-    return {
-      headers: [],
-      rows: [],
-      headerCells: [],
-      rowCells: [],
-    };
+    const cells: TableCellModel[] = [];
+    let column = 0;
+    let segmentStart = row.from;
+    let sawContent = false;
+
+    for (let child = row.firstChild; child; child = child.nextSibling) {
+      if (child.name === "TableDelimiter") {
+        const leading = !sawContent && child.from === row.from;
+
+        if (!leading) {
+          cells[column] ??= { from: segmentStart, to: segmentStart, runs: [] };
+          column += 1;
+        }
+
+        // An empty cell starts after the pipe and its padding space.
+        segmentStart = state.doc.sliceString(child.to, child.to + 1) === " "
+          ? child.to + 1
+          : child.to;
+        sawContent = true;
+        continue;
+      }
+
+      if (child.name === "TableCell") {
+        cells[column] = {
+          from: child.from,
+          to: child.to,
+          runs: inlineRuns(state, child.from, child.to),
+        };
+        sawContent = true;
+      }
+    }
+
+    const lastChild = row.lastChild;
+
+    if (lastChild && lastChild.name !== "TableDelimiter") {
+      cells[column] ??= { from: segmentStart, to: segmentStart, runs: [] };
+    }
+
+    rows.push(Array.from(cells, (cell) => cell ?? { from: row.to, to: row.to, runs: [] }));
   }
 
-  const headerCells = splitTableRowWithSource(lines[0].text, lines[0].from);
-  const rowCells = lines
-    .slice(2)
-    .map((line) => splitTableRowWithSource(line.text, line.from));
+  const header = rows.shift() ?? [];
+  const columns = header.length;
+  const padded = rows.map((cells) => {
+    // Missing cells sit at the end of the row's last cell.
+    const end = cells.length > 0 ? cells[cells.length - 1].to : table.to;
+
+    return Array.from(
+      { length: columns },
+      (_, index) => cells[index] ?? { from: end, to: end, runs: [] },
+    );
+  });
 
   return {
-    headers: headerCells.map((cell) => cell.text),
-    rows: rowCells.map((row) => row.map((cell) => cell.text)),
-    headerCells,
-    rowCells,
+    alignments: Array.from({ length: columns }, (_, index) => alignments[index] ?? null),
+    header,
+    rows: padded,
+  };
+}
+
+export interface CodeBlockModel {
+  language: string;
+  /** Code lines with their document offsets (fence indentation removed). */
+  lines: Array<{ from: number; text: string }>;
+}
+
+/**
+ * The code of a fenced block. A block without a closing fence (still being
+ * typed, or at the end of the file) keeps its last line.
+ */
+export function codeBlockModel(state: EditorState, from: number, to: number): CodeBlockModel {
+  const firstLine = state.doc.lineAt(from);
+  const lastLine = state.doc.lineAt(to);
+  const opening = /^([ \t]*)(`{3,}|~{3,})(.*)$/.exec(firstLine.text);
+  const indent = opening?.[1].length ?? 0;
+  const fence = opening?.[2] ?? "```";
+  const closing = new RegExp(`^[ \\t]*${fence[0] === "`" ? "`" : "~"}{${fence.length},}[ \\t]*$`);
+  const closed = lastLine.number > firstLine.number && closing.test(lastLine.text);
+  const lines: CodeBlockModel["lines"] = [];
+
+  for (
+    let number = firstLine.number + 1;
+    number <= (closed ? lastLine.number - 1 : lastLine.number);
+    number += 1
+  ) {
+    const line = state.doc.line(number);
+    const strip = Math.min(indent, /^[ ]*/.exec(line.text)?.[0].length ?? 0);
+    lines.push({ from: line.from + strip, text: line.text.slice(strip) });
+  }
+
+  return {
+    language: (opening?.[3] ?? "").trim(),
+    lines,
   };
 }
 
@@ -1448,24 +1815,21 @@ class TaskMarkerWidget extends WidgetType {
 }
 
 class CodeBlockWidget extends WidgetType {
-  private readonly language: string;
-  private readonly body: string;
+  private readonly model: CodeBlockModel;
   private readonly editAt: number;
   private readonly matches: SourceRange[];
   private readonly selected: SourceRange | null;
   private readonly readOnly: boolean;
 
   constructor(
-    markdown: string,
+    model: CodeBlockModel,
     editAt: number,
     matches: SourceRange[] = [],
     selected: SourceRange | null = null,
     readOnly = false,
   ) {
     super();
-    const parsed = parseCodeFence(markdown);
-    this.language = parsed.language;
-    this.body = parsed.body;
+    this.model = model;
     this.editAt = editAt;
     this.matches = matches;
     this.selected = selected;
@@ -1476,18 +1840,15 @@ class CodeBlockWidget extends WidgetType {
     return (
       widget instanceof CodeBlockWidget &&
       widget.readOnly === this.readOnly &&
-      widget.language === this.language &&
-      widget.body === this.body &&
       widget.editAt === this.editAt &&
+      JSON.stringify(widget.model) === JSON.stringify(this.model) &&
       sameRanges(widget.matches, this.matches) &&
       sameRange(widget.selected, this.selected)
     );
   }
 
   get estimatedHeight() {
-    const lines = Math.max(1, this.body.split("\n").length);
-
-    return lines * 23 + 64;
+    return Math.max(1, this.model.lines.length) * 23 + 64;
   }
 
   private handlePointerDown(event: MouseEvent, view: EditorView) {
@@ -1562,18 +1923,25 @@ class CodeBlockWidget extends WidgetType {
       });
     }
 
-    if (this.language) {
+    if (this.model.language) {
       const label = document.createElement("span");
       label.className = "cm-md-code-language";
-      label.textContent = this.language;
+      label.textContent = this.model.language;
       wrapper.append(label);
     }
 
     const pre = document.createElement("pre");
     const code = document.createElement("code");
-    code.append(
-      highlightedTextFragment(this.body, this.editAt, this.matches, this.selected),
-    );
+
+    this.model.lines.forEach((line, index) => {
+      if (index > 0) {
+        code.append(textNode("\n"));
+      }
+
+      code.append(
+        highlightedTextFragment(line.text, line.from, this.matches, this.selected),
+      );
+    });
     pre.append(code);
     wrapper.append(pre);
 
@@ -1581,29 +1949,83 @@ class CodeBlockWidget extends WidgetType {
   }
 }
 
+function renderInlineRuns(
+  runs: InlineRun[],
+  matches: SourceRange[],
+  selected: SourceRange | null,
+) {
+  const fragment = document.createDocumentFragment();
+  let index = 0;
+
+  // Consecutive runs with the same styling share one element, so a hidden
+  // escape inside code does not split the code box in two.
+  while (index < runs.length) {
+    const first = runs[index];
+    const key = `${first.styles.join()}|${first.url ?? ""}`;
+    let node: Node = document.createDocumentFragment();
+
+    while (
+      index < runs.length &&
+      `${runs[index].styles.join()}|${runs[index].url ?? ""}` === key
+    ) {
+      node.appendChild(
+        highlightedTextFragment(runs[index].text, runs[index].from, matches, selected),
+      );
+      index += 1;
+    }
+
+    const wrap = (element: HTMLElement) => {
+      element.append(node);
+      node = element;
+    };
+
+    if (first.styles.includes("code")) {
+      const code = document.createElement("code");
+      code.className = "cm-md-inline-code";
+      wrap(code);
+    }
+
+    if (first.styles.includes("del")) {
+      wrap(document.createElement("del"));
+    }
+
+    if (first.styles.includes("em")) {
+      wrap(document.createElement("em"));
+    }
+
+    if (first.styles.includes("strong")) {
+      wrap(document.createElement("strong"));
+    }
+
+    if (first.url) {
+      const link = document.createElement("span");
+      link.className = "cm-md-clickable-link";
+      link.dataset.markdownUrl = first.url;
+      wrap(link);
+    }
+
+    fragment.append(node);
+  }
+
+  return fragment;
+}
+
 class TableWidget extends WidgetType {
-  private readonly headers: string[];
-  private readonly rows: string[][];
-  private readonly headerCells: TableCellSource[];
-  private readonly rowCells: TableCellSource[][];
+  private readonly model: TableModel;
   private readonly editAt: number;
   private readonly matches: SourceRange[];
   private readonly selected: SourceRange | null;
   private readonly readOnly: boolean;
 
   constructor(
-    markdown: string,
+    model: TableModel,
     editAt: number,
     matches: SourceRange[] = [],
     selected: SourceRange | null = null,
     readOnly = false,
   ) {
     super();
-    const parsed = parseMarkdownTable(markdown);
-    this.headers = parsed.headers;
-    this.rows = parsed.rows;
-    this.headerCells = parsed.headerCells;
-    this.rowCells = parsed.rowCells;
+    this.model = model;
     this.editAt = editAt;
     this.matches = matches;
     this.selected = selected;
@@ -1611,7 +2033,7 @@ class TableWidget extends WidgetType {
   }
 
   get estimatedHeight() {
-    const visibleRows = Math.max(1, this.rows.length + 1);
+    const visibleRows = Math.max(1, this.model.rows.length + 1);
 
     return visibleRows * 40 + 30;
   }
@@ -1620,26 +2042,10 @@ class TableWidget extends WidgetType {
     return (
       widget instanceof TableWidget &&
       widget.readOnly === this.readOnly &&
-      JSON.stringify(widget.headers) === JSON.stringify(this.headers) &&
-      JSON.stringify(widget.rows) === JSON.stringify(this.rows) &&
-      JSON.stringify(widget.headerCells) === JSON.stringify(this.headerCells) &&
-      JSON.stringify(widget.rowCells) === JSON.stringify(this.rowCells) &&
       widget.editAt === this.editAt &&
+      JSON.stringify(widget.model) === JSON.stringify(this.model) &&
       sameRanges(widget.matches, this.matches) &&
       sameRange(widget.selected, this.selected)
-    );
-  }
-
-  private cellContent(source: TableCellSource | undefined, fallback: string) {
-    if (!source) {
-      return textNode(fallback);
-    }
-
-    return highlightedTextFragment(
-      source.text,
-      this.editAt + source.from,
-      this.matches,
-      this.selected,
     );
   }
 
@@ -1668,13 +2074,22 @@ class TableWidget extends WidgetType {
     return Math.round(sourceFrom + (sourceTo - sourceFrom) * ratio);
   }
 
-  private applyCellSource(cell: HTMLElement, source?: TableCellSource) {
-    if (!source) {
-      return;
+  private fillCell(
+    cell: HTMLElement,
+    model: TableCellModel,
+    position: TableCellPosition,
+  ) {
+    cell.dataset.sourceFrom = String(model.from);
+    cell.dataset.sourceTo = String(model.to);
+    this.applyCellPosition(cell, position);
+
+    const alignment = this.model.alignments[position.column];
+
+    if (alignment) {
+      cell.style.textAlign = alignment;
     }
 
-    cell.dataset.sourceFrom = String(this.editAt + source.from);
-    cell.dataset.sourceTo = String(this.editAt + source.to);
+    cell.append(renderInlineRuns(model.runs, this.matches, this.selected));
   }
 
   private applyCellPosition(
@@ -1908,6 +2323,24 @@ class TableWidget extends WidgetType {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-table-wrapper";
 
+    // Links in cells open on click, in both modes.
+    wrapper.addEventListener("mousedown", (event) => {
+      const link = event.button === 0 && event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-markdown-url]")
+        : null;
+
+      if (link?.dataset.markdownUrl) {
+        event.preventDefault();
+        event.stopPropagation();
+        dispatchOpenUrl(link.dataset.markdownUrl);
+        return;
+      }
+
+      if (!this.readOnly) {
+        this.handleTablePointerDown(event, view, wrapper);
+      }
+    });
+
     // In reading mode the table stays rendered: clicks select cell text
     // natively instead of revealing the source or starting a cell selection.
     if (!this.readOnly) {
@@ -1916,9 +2349,6 @@ class TableWidget extends WidgetType {
       wrapper.ariaLabel = "表を Markdown ソースで編集";
       wrapper.title = "クリックして Markdown ソースで編集";
 
-      wrapper.addEventListener("mousedown", (event) =>
-        this.handleTablePointerDown(event, view, wrapper),
-      );
       wrapper.addEventListener("contextmenu", (event) =>
         this.handleTableContextMenu(event, view, wrapper),
       );
@@ -1933,14 +2363,9 @@ class TableWidget extends WidgetType {
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
 
-    for (const [index, header] of this.headers.entries()) {
+    for (const [index, header] of this.model.header.entries()) {
       const cell = document.createElement("th");
-      this.applyCellSource(cell, this.headerCells[index]);
-      this.applyCellPosition(cell, {
-        row: 0,
-        column: index,
-      });
-      cell.append(this.cellContent(this.headerCells[index], header));
+      this.fillCell(cell, header, { row: 0, column: index });
       headerRow.append(cell);
     }
 
@@ -1949,19 +2374,12 @@ class TableWidget extends WidgetType {
 
     const tbody = document.createElement("tbody");
 
-    for (const [rowIndex, row] of this.rows.entries()) {
+    for (const [rowIndex, row] of this.model.rows.entries()) {
       const tableRow = document.createElement("tr");
 
-      for (const [cellIndex, cellValue] of row.entries()) {
+      for (const [cellIndex, cellModel] of row.entries()) {
         const cell = document.createElement("td");
-        this.applyCellSource(cell, this.rowCells[rowIndex]?.[cellIndex]);
-        this.applyCellPosition(cell, {
-          row: rowIndex + 1,
-          column: cellIndex,
-        });
-        cell.append(
-          this.cellContent(this.rowCells[rowIndex]?.[cellIndex], cellValue),
-        );
+        this.fillCell(cell, cellModel, { row: rowIndex + 1, column: cellIndex });
         tableRow.append(cell);
       }
 
@@ -2026,6 +2444,18 @@ class HorizontalRuleWidget extends WidgetType {
   }
 }
 
+/**
+ * Turns an image source from the document into a URL the webview can load
+ * (relative and local paths need the document's folder and the platform's
+ * file URL scheme). Null hides the image. Provided by the editor per tab.
+ */
+export const imageSourceResolver = Facet.define<
+  (source: string) => string | null,
+  (source: string) => string | null
+>({
+  combine: (values) => values[0] ?? ((source) => source),
+});
+
 class ImageWidget extends WidgetType {
   private readonly alt: string;
   private readonly url: string;
@@ -2064,13 +2494,24 @@ class ImageWidget extends WidgetType {
   }
 }
 
-function imageParts(markdown: string) {
-  const match = /^!\[(.*)]\((.*)\)$/.exec(markdown.trim());
+/** The alt text and destination of an image node (title and <> dropped). */
+export function imageParts(state: EditorState, node: SyntaxNode) {
+  const marks: SyntaxNode[] = [];
+  let url = "";
 
-  return {
-    alt: match?.[1] ?? "",
-    url: match?.[2] ?? "",
-  };
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.name === "LinkMark") {
+      marks.push(child);
+    } else if (child.name === "URL") {
+      url = state.doc.sliceString(child.from, child.to).replace(/^<(.*)>$/, "$1");
+    }
+  }
+
+  const alt = marks.length >= 2
+    ? state.doc.sliceString(marks[0].to, marks[1].from)
+    : "";
+
+  return { alt, url };
 }
 
 function listLineDecoration(className: string, indentEm: number, markerEm: number) {
@@ -2128,10 +2569,14 @@ function addListLayoutDecorations(
   state: EditorState,
   decorations: PreviewDecoration[],
   sourceRanges: SourceRange[],
+  from: number,
+  to: number,
 ) {
   const contentStarts: number[] = [];
 
   syntaxTree(state).iterate({
+    from,
+    to,
     enter(node) {
       if (isStructuralBlock(node.name)) {
         return false;
@@ -2250,42 +2695,153 @@ function addListLayoutDecorations(
   });
 }
 
-function buildLivePreviewDecorations(state: EditorState): DecorationSet {
+function sortedDecorationSet(decorations: PreviewDecoration[]): DecorationSet {
+  decorations.sort((first, second) => {
+    if (first.from !== second.from) {
+      return first.from - second.from;
+    }
+
+    const firstStartSide = (first.value as Decoration & { startSide?: number })
+      .startSide ?? 0;
+    const secondStartSide = (second.value as Decoration & { startSide?: number })
+      .startSide ?? 0;
+
+    if (firstStartSide !== secondStartSide) {
+      return firstStartSide - secondStartSide;
+    }
+
+    if (first.to !== second.to) {
+      return first.to - second.to;
+    }
+
+    const firstEndSide = (first.value as Decoration & { endSide?: number })
+      .endSide ?? 0;
+    const secondEndSide = (second.value as Decoration & { endSide?: number })
+      .endSide ?? 0;
+
+    return firstEndSide - secondEndSide;
+  });
+
+  const builder = new RangeSetBuilder<Decoration>();
+
+  for (const decoration of decorations) {
+    builder.add(decoration.from, decoration.to, decoration.value);
+  }
+
+  return builder.finish();
+}
+
+// Rendered tables, code blocks and rules. Block widgets have to come from
+// the editor state (not a view plugin), so this covers the whole document;
+// it only walks block structure, never inline content.
+function buildBlockDecorations(state: EditorState): DecorationSet {
   const decorations: PreviewDecoration[] = [];
-  const sourceRanges = sourceRangesForSelection(state);
-  const searchMatches = activeSearchMatches(state);
   const mainSelection = state.selection.main;
   const readOnly = isReadingMode(state);
 
-  for (const range of horizontalRuleMatchRanges(state, searchMatches)) {
-    sourceRanges.all.push(range);
-    sourceRanges.structural.push(range);
-  }
+  for (const block of structuralBlocks(state, 0, state.doc.length)) {
+    if (block.revealed) {
+      continue;
+    }
 
-  const tree = syntaxTree(state);
+    const firstLine = state.doc.lineAt(block.from);
+    const editAt =
+      block.name === "FencedCode" && firstLine.to < block.to
+        ? firstLine.to + 1
+        : block.from;
+    const blockSelected =
+      block.matches.length > 0 &&
+      !mainSelection.empty &&
+      mainSelection.from < block.to &&
+      block.from < mainSelection.to
+        ? { from: mainSelection.from, to: mainSelection.to }
+        : null;
+    let widget: WidgetType;
 
-  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
-    const line = state.doc.line(lineNumber);
-    const lineRange = {
-      from: line.from,
-      to: line.to,
-    };
-    const decoration = isRangeInSourceRange(lineRange, sourceRanges.structural)
-      ? structuralSourceLineDecoration(line.from, line.to)
-      : sourceLineDecoration(line.from, line.to);
+    if (block.name === "FencedCode") {
+      widget = new CodeBlockWidget(
+        codeBlockModel(state, block.from, block.to),
+        editAt,
+        block.matches,
+        blockSelected,
+        readOnly,
+      );
+    } else if (block.name === "Table") {
+      widget = new TableWidget(
+        tableModel(state, block.node),
+        editAt,
+        block.matches,
+        blockSelected,
+        readOnly,
+      );
+    } else {
+      widget = new HorizontalRuleWidget(
+        state.doc.sliceString(block.from, block.to),
+        editAt,
+        readOnly,
+      );
+    }
 
     addDecoration(
       decorations,
-      line.from,
-      line.from,
-      decoration,
+      block.from,
+      block.to,
+      Decoration.replace({
+        widget,
+        block: true,
+      }),
     );
   }
 
-  addListLayoutDecorations(state, decorations, sourceRanges.all);
+  return sortedDecorationSet(decorations);
+}
 
-  tree.iterate({
+// Line and inline decorations for the lines currently rendered (the
+// viewport): headings, quotes, list layout, hidden Markdown marks, links,
+// inline code, task boxes and images. Built per viewport so typing and
+// moving the caret stay fast in long documents.
+function buildInlineDecorations(
+  state: EditorState,
+  from: number,
+  to: number,
+): DecorationSet {
+  const decorations: PreviewDecoration[] = [];
+  const sourceRanges = sourceRangesForSelection(state);
+  const blocks = structuralBlocks(state, from, to);
+
+  for (const block of blocks) {
+    if (block.revealed && !isRangeInSourceRange(block, sourceRanges.structural)) {
+      sourceRanges.all.push(block);
+      sourceRanges.structural.push(block);
+    }
+  }
+
+  const isRenderedBlock = (node: SyntaxNodeRef) =>
+    blocks.some(
+      (block) => !block.revealed && block.from === node.from && block.to === node.to,
+    );
+
+  for (let position = from; position <= to; ) {
+    const line = state.doc.lineAt(position);
+    const decoration = isRangeInSourceRange(line, sourceRanges.structural)
+      ? structuralSourceLineDecoration(line.from, line.to)
+      : sourceLineDecoration(line.from, line.to);
+
+    addDecoration(decorations, line.from, line.from, decoration);
+    position = line.to + 1;
+  }
+
+  addListLayoutDecorations(state, decorations, sourceRanges.all, from, to);
+
+  syntaxTree(state).iterate({
+    from,
+    to,
     enter(node) {
+      // Rendered blocks are widgets from the block field.
+      if (isStructuralBlock(node.name) && isRenderedBlock(node)) {
+        return false;
+      }
+
       if (node.name === "InlineCode") {
         addDecoration(decorations, node.from, node.to, inlineCodeDecoration);
       }
@@ -2304,8 +2860,8 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
       }
 
       if (node.name === "Blockquote") {
-        const fromLine = state.doc.lineAt(node.from);
-        const toLine = state.doc.lineAt(node.to);
+        const fromLine = state.doc.lineAt(Math.max(node.from, from));
+        const toLine = state.doc.lineAt(Math.min(node.to, to));
 
         for (let lineNumber = fromLine.number; lineNumber <= toLine.number; lineNumber += 1) {
           const line = state.doc.line(lineNumber);
@@ -2328,63 +2884,12 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
         }
       }
 
-      if (
-        isStructuralBlock(node.name) &&
-        !isInSourceRange(node, sourceRanges.structural)
-      ) {
-        const text = state.doc.sliceString(node.from, node.to);
-        const firstLine = state.doc.lineAt(node.from);
-        const editAt =
-          node.name === "FencedCode" && firstLine.to < node.to
-            ? firstLine.to + 1
-            : node.from;
-        const blockMatches = searchMatches.filter(
-          (match) => match.from < node.to && node.from < match.to,
-        );
-        const blockSelected =
-          blockMatches.length > 0 &&
-          !mainSelection.empty &&
-          mainSelection.from < node.to &&
-          node.from < mainSelection.to
-            ? { from: mainSelection.from, to: mainSelection.to }
-            : null;
-        let widget: WidgetType;
-
-        if (node.name === "FencedCode") {
-          widget = new CodeBlockWidget(
-            text,
-            editAt,
-            blockMatches,
-            blockSelected,
-            readOnly,
-          );
-        } else if (node.name === "Table") {
-          widget = new TableWidget(
-            text,
-            editAt,
-            blockMatches,
-            blockSelected,
-            readOnly,
-          );
-        } else {
-          widget = new HorizontalRuleWidget(text, editAt, readOnly);
-        }
-
-        addDecoration(
-          decorations,
-          node.from,
-          node.to,
-          Decoration.replace({
-            widget,
-            block: true,
-          }),
-        );
-        return false;
-      }
-
       if (node.name === "Image" && !isInSourceRange(node, sourceRanges.all)) {
-        const text = state.doc.sliceString(node.from, node.to);
-        const image = imageParts(text);
+        const parts = imageParts(state, node.node);
+        const image = {
+          alt: parts.alt,
+          url: parts.url ? state.facet(imageSourceResolver)(parts.url) : null,
+        };
 
         if (image.url) {
           addDecoration(
@@ -2473,74 +2978,122 @@ function buildLivePreviewDecorations(state: EditorState): DecorationSet {
           return;
         }
 
-        const to =
+        const tokenTo =
           node.name === "HeaderMark" || node.name === "QuoteMark"
             ? tokenEndWithTrailingSpace(state, node.to)
             : node.to;
-        addDecoration(decorations, node.from, to, hiddenMarkDecoration);
+        addDecoration(decorations, node.from, tokenTo, hiddenMarkDecoration);
       }
     },
   });
 
-  decorations.sort((first, second) => {
-    if (first.from !== second.from) {
-      return first.from - second.from;
-    }
-
-    const firstStartSide = (first.value as Decoration & { startSide?: number })
-      .startSide ?? 0;
-    const secondStartSide = (second.value as Decoration & { startSide?: number })
-      .startSide ?? 0;
-
-    if (firstStartSide !== secondStartSide) {
-      return firstStartSide - secondStartSide;
-    }
-
-    if (first.to !== second.to) {
-      return first.to - second.to;
-    }
-
-    const firstEndSide = (first.value as Decoration & { endSide?: number })
-      .endSide ?? 0;
-    const secondEndSide = (second.value as Decoration & { endSide?: number })
-      .endSide ?? 0;
-
-    return firstEndSide - secondEndSide;
-  });
-
-  const builder = new RangeSetBuilder<Decoration>();
-
-  for (const decoration of decorations) {
-    builder.add(decoration.from, decoration.to, decoration.value);
-  }
-
-  return builder.finish();
+  return sortedDecorationSet(decorations);
 }
 
-const livePreviewField = StateField.define<DecorationSet>({
+/** Exposed for tests: the line and inline decorations of a whole document. */
+export function inlinePreviewDecorations(state: EditorState): DecorationSet {
+  return buildInlineDecorations(state, 0, state.doc.length);
+}
+
+function searchStateChanged(transaction: Transaction) {
+  return (
+    transaction.effects.some((effect) => effect.is(setSearchQuery)) ||
+    searchPanelOpen(transaction.startState) !== searchPanelOpen(transaction.state)
+  );
+}
+
+function treeOrModeChanged(startState: EditorState, state: EditorState) {
+  return (
+    // The parser works in the background on long documents; redraw as it
+    // reaches more of the text instead of waiting for the next edit.
+    syntaxTree(startState) !== syntaxTree(state) ||
+    isReadingMode(startState) !== isReadingMode(state)
+  );
+}
+
+function selectionRevealKey(state: EditorState) {
+  return selectionRevealedBlocks(state)
+    .map((block) => `${block.from}-${block.to}`)
+    .join(",");
+}
+
+const blockPreviewField = StateField.define<{
+  decorations: DecorationSet;
+  revealKey: string;
+}>({
   create(state) {
-    return buildLivePreviewDecorations(state);
+    return {
+      decorations: buildBlockDecorations(state),
+      revealKey: selectionRevealKey(state),
+    };
   },
-  update(decorations, transaction) {
+  update(value, transaction) {
+    const { state } = transaction;
+
     if (
       transaction.docChanged ||
-      transaction.selection ||
-      transaction.effects.some((effect) => effect.is(setSearchQuery)) ||
-      searchPanelOpen(transaction.startState) !== searchPanelOpen(transaction.state) ||
-      isReadingMode(transaction.startState) !== isReadingMode(transaction.state)
+      searchStateChanged(transaction) ||
+      treeOrModeChanged(transaction.startState, state)
     ) {
-      return buildLivePreviewDecorations(transaction.state);
+      return {
+        decorations: buildBlockDecorations(state),
+        revealKey: selectionRevealKey(state),
+      };
     }
 
-    return decorations.map(transaction.changes);
+    if (transaction.selection) {
+      const revealKey = selectionRevealKey(state);
+
+      // Most caret moves change nothing here; only entering or leaving a
+      // block (or, while searching, the selected match) does.
+      if (revealKey !== value.revealKey || searchPanelOpen(state)) {
+        return { decorations: buildBlockDecorations(state), revealKey };
+      }
+    }
+
+    return value;
   },
   provide(field) {
-    return EditorView.decorations.from(field);
+    return EditorView.decorations.from(field, (value) => value.decorations);
   },
 });
 
+const inlinePreviewPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildInlineDecorations(
+        view.state,
+        view.viewport.from,
+        view.viewport.to,
+      );
+    }
+
+    update(update: ViewUpdate) {
+      if (
+        update.docChanged ||
+        update.viewportChanged ||
+        update.selectionSet ||
+        update.transactions.some(searchStateChanged) ||
+        treeOrModeChanged(update.startState, update.state)
+      ) {
+        this.decorations = buildInlineDecorations(
+          update.state,
+          update.view.viewport.from,
+          update.view.viewport.to,
+        );
+      }
+    }
+  },
+  {
+    decorations: (plugin) => plugin.decorations,
+  },
+);
+
 export const livePreview = [
-  livePreviewField,
+  blockPreviewField,
+  inlinePreviewPlugin,
   readingModeChangeGuard,
   sourceLineNavigation,
   structuralSourceLineMouseDownHandler,

@@ -2,7 +2,7 @@
 // rendered wherever the user clicks, nothing can be typed or deleted, the mode
 // belongs to each tab, and leaving it restores normal live-preview editing.
 import assert from "node:assert/strict";
-import { chromium } from "playwright";
+import { launchBrowser } from "./launch.mjs";
 
 const baseUrl = process.env.MARKDOWNPAD_URL ?? "http://127.0.0.1:1420";
 const blankUrl = new URL("?blank=1", baseUrl).toString();
@@ -25,7 +25,7 @@ const sampleMarkdown = [
   ...Array.from({ length: 80 }, (_, index) => `行 ${index + 1} の本文`),
 ].join("\n");
 
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+const browser = await launchBrowser();
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const consoleErrors = [];

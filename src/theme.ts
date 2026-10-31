@@ -1,7 +1,7 @@
 export type ThemeMode = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
 
-const themeStorageKey = "markdownpad.theme.v1";
+export const themeStorageKey = "markdownpad.theme.v1";
 const darkColorSchemeQuery = "(prefers-color-scheme: dark)";
 
 export function prefersDarkColorScheme(): boolean {

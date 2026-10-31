@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "print",
+  "description": "Print preview windows only render a sanitized document and close themselves",
+  "windows": [
+    "print-*"
+  ],
+  "permissions": [
+    "core:window:allow-destroy"
+  ]
+}
