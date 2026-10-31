@@ -24,6 +24,8 @@ use text_file::{EncodeError, FileStamp, LineEnding, TextEncoding};
 const OPEN_FILES_REQUESTED_EVENT: &str = "open-files-requested";
 const PRINT_WINDOW_LABEL_PREFIX: &str = "markdownpad-print-";
 const MAIN_WINDOW_LABEL: &str = "main";
+/// Event that asks an editor window to close as part of quitting the app.
+const QUIT_REQUESTED_EVENT: &str = "quit-requested";
 
 /// Extensions accepted from the command line (file association, "Open with",
 /// a second launch). The open dialog additionally offers "All files".
@@ -101,6 +103,79 @@ impl FileAccess {
         } else {
             Err("このファイルへのアクセスは許可されていません。".to_string())
         }
+    }
+}
+
+/// Editor windows still to be closed while the app quits, in order; `None`
+/// when no quit is in progress. Windows are asked one at a time, so each can
+/// show its own unsaved-changes question, and a "Cancel" stops the quit.
+#[derive(Default)]
+struct QuitState {
+    remaining: Mutex<Option<Vec<String>>>,
+}
+
+fn start_quit<R: Runtime>(app: &AppHandle<R>, initiator: &str) {
+    let mut labels: Vec<String> = app
+        .webview_windows()
+        .into_keys()
+        .filter(|label| is_editor_window_label(label))
+        .collect();
+    labels.sort_by_key(|label| (label != initiator, label.clone()));
+
+    let Some(first) = labels.first().cloned() else {
+        app.exit(0);
+        return;
+    };
+
+    if let Ok(mut remaining) = app.state::<QuitState>().remaining.lock() {
+        *remaining = Some(labels);
+    }
+
+    let _ = app.emit_to(first.as_str(), QUIT_REQUESTED_EVENT, ());
+}
+
+/// Called when an editor window is gone: asks the next one, or exits once
+/// every editor window has closed (print windows close with the app).
+fn continue_quit<R: Runtime>(app: &AppHandle<R>, closed_label: &str) {
+    let quit = app.state::<QuitState>();
+    let next = {
+        let Ok(mut state) = quit.remaining.lock() else {
+            return;
+        };
+        let Some(remaining) = state.as_mut() else {
+            return;
+        };
+        let was_current = remaining.first().map(String::as_str) == Some(closed_label);
+        remaining.retain(|label| label != closed_label);
+
+        if remaining.is_empty() {
+            *state = None;
+            None
+        } else if was_current {
+            Some(remaining[0].clone())
+        } else {
+            return;
+        }
+    };
+
+    match next {
+        Some(label) => {
+            let _ = app.emit_to(label.as_str(), QUIT_REQUESTED_EVENT, ());
+        }
+        None => app.exit(0),
+    }
+}
+
+#[tauri::command]
+fn request_quit<R: Runtime>(app: AppHandle<R>, window: WebviewWindow<R>) {
+    start_quit(&app, window.label());
+}
+
+/// The window was kept open (the user chose Cancel): stop quitting.
+#[tauri::command]
+fn cancel_quit(quit: State<'_, QuitState>) {
+    if let Ok(mut remaining) = quit.remaining.lock() {
+        *remaining = None;
     }
 }
 
@@ -829,6 +904,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(OpenFileRouting::default())
         .manage(FileAccess::default())
+        .manage(QuitState::default())
         .setup(|app| {
             // Snapshots still on disk now were left by a session that did not
             // end normally.
@@ -853,6 +929,12 @@ pub fn run() {
             if let Some(window) =
                 focused_window.or_else(|| app.get_webview_window(MAIN_WINDOW_LABEL))
             {
+                if id == "quit" {
+                    // Quit closes every window, not just this one.
+                    start_quit(app, window.label());
+                    return;
+                }
+
                 // `emit` would broadcast to every window; deliver only to the
                 // window the menu was used in.
                 let _ = app.emit_to(window.label(), "menu-action", id);
@@ -883,6 +965,8 @@ pub fn run() {
                     if let Ok(mut pending) = routing.pending_by_window.lock() {
                         pending.remove(label);
                     }
+
+                    continue_quit(window.app_handle(), label);
                 }
                 _ => {}
             }
@@ -899,7 +983,9 @@ pub fn run() {
             reload_markdown_file,
             open_external_url,
             sync_view_menu,
-            take_pending_open_files
+            take_pending_open_files,
+            request_quit,
+            cancel_quit
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MarkdownPad");

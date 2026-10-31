@@ -155,6 +155,59 @@ try {
     await page.close();
   }
 
+  // Keyboard: F3 steps one match, Up/Down walk through a wrapped paragraph,
+  // Tab nests list items and keeps the focus in the editor.
+  {
+    const page = await openBlankPage(browser, errors);
+    await page.click(".cm-content");
+    await page.keyboard.insertText("m0 m1 m2 m3 m4");
+    await page.keyboard.press("Control+Home");
+    await page.keyboard.press("Control+f");
+    await page.keyboard.insertText("m");
+    const selectedText = () =>
+      page.evaluate(() => {
+        const view = document.querySelector(".cm-content").cmTile.root.view;
+        const { from, to } = view.state.selection.main;
+        return view.state.sliceDoc(from, to + 1);
+      });
+    const found = [];
+
+    for (let index = 0; index < 3; index += 1) {
+      await page.keyboard.press("F3");
+      found.push(await selectedText());
+    }
+
+    assert.deepEqual(found, ["m0", "m1", "m2"], "F3 moves to the next match only");
+    await page.keyboard.press("Escape");
+
+    const paragraph = "これは折り返される長い段落です。".repeat(30);
+    await page.click(".cm-content");
+    await page.keyboard.press("Control+a");
+    await page.keyboard.insertText(`${paragraph}\n次の段落`);
+    await page.keyboard.press("Control+Home");
+    await page.keyboard.press("ArrowDown");
+    const afterDown = await page.evaluate(
+      () => document.querySelector(".cm-content").cmTile.root.view.state.selection.main.head,
+    );
+    assert.ok(
+      afterDown > 0 && afterDown < paragraph.length,
+      `ArrowDown stays inside the wrapped paragraph (got ${afterDown})`,
+    );
+
+    await page.keyboard.press("Control+a");
+    await page.keyboard.insertText("- 親\n- 子にしたい");
+    await page.keyboard.press("Tab");
+    assert.equal(await editorDoc(page), "- 親\n  - 子にしたい");
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.classList.contains("cm-content")),
+      true,
+      "Tab keeps the focus in the editor",
+    );
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await editorDoc(page), "- 親\n- 子にしたい");
+    await page.close();
+  }
+
   assert.deepEqual(errors, []);
   console.log("PASS: undo and table cell selections stay with their own document");
 } finally {

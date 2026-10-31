@@ -80,6 +80,13 @@ export interface MarkdownEditorHandle {
   selectAll: () => void;
 }
 
+// Ctrl+F and F3 are app shortcuts (the App opens the search panel in the
+// right mode and runs Find Next). Keeping CodeMirror's bindings as well made
+// every F3 press step over two matches.
+const editorSearchKeymap = searchKeymap.filter(
+  (binding) => binding.key !== "Mod-f" && binding.key !== "F3",
+);
+
 type SearchPanelMode = "search" | "replace";
 
 const searchPanelModes = new WeakMap<EditorView, SearchPanelMode>();
@@ -978,7 +985,7 @@ function MarkdownEditor({
           // the theme leaves it unpainted, as Obsidian does.
           highlightActiveLine(),
           markdownPadKeymap,
-          keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+          keymap.of([...defaultKeymap, ...historyKeymap, ...editorSearchKeymap]),
           livePreview,
           wrapCompartment.of(settings.wordWrap ? EditorView.lineWrapping : []),
           themeCompartment.of(editorTheme(settings.zoom, settings.wordWrap)),

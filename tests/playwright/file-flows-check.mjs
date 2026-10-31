@@ -253,6 +253,38 @@ try {
     await page.close();
   }
 
+  // Quit asks the Rust side to close every window; a window that is kept
+  // open (Cancel) stops the quit.
+  {
+    const page = await openApp(
+      browser,
+      { load_launch_markdown_files: [], load_recovery_snapshots: [] },
+      errors,
+    );
+
+    await page.evaluate(() => window.__tauriMock.emit("menu-action", "quit"));
+    await page.waitForTimeout(100);
+    assert.equal((await tauriCalls(page, "request_quit")).length, 1);
+
+    await page.click(".cm-content");
+    await page.keyboard.insertText("未保存");
+    await page.evaluate(() => window.__tauriMock.emit("quit-requested", null));
+    await dialogText(page);
+    await page.click("[role=dialog] button:has-text('キャンセル')");
+    await page.waitForTimeout(100);
+    assert.equal((await tauriCalls(page, "cancel_quit")).length, 1);
+    assert.equal((await tauriCalls(page, "plugin:window|destroy")).length, 0);
+
+    await page.evaluate(() => window.__tauriMock.emit("quit-requested", null));
+    await dialogText(page);
+    await page.click("[role=dialog] button:has-text('保存しない')");
+    await page.waitForTimeout(100);
+    assert.equal((await tauriCalls(page, "plugin:window|destroy")).length, 1);
+    assert.equal((await tauriCalls(page, "discard_recovery_snapshot")).length, 1);
+    assert.equal((await tauriCalls(page, "cancel_quit")).length, 1);
+    await page.close();
+  }
+
   assert.deepEqual(errors, []);
   console.log("PASS: recovery, conflicts, encodings and failures are handled visibly");
 } finally {

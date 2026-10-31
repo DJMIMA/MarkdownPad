@@ -4,6 +4,7 @@ import {
   type MarkdownEditorHandle,
 } from "./editor/MarkdownEditor";
 import {
+  cancelQuit,
   closeCurrentWindow,
   discardRecoverySnapshot,
   discardRecoverySnapshots,
@@ -12,6 +13,7 @@ import {
   listenToCloseRequested,
   listenToMenuActions,
   listenToOpenFilesRequested,
+  listenToQuitRequested,
   listenToWindowFocus,
   loadLaunchMarkdownFiles,
   loadRecoverySnapshots,
@@ -24,6 +26,7 @@ import {
   printMarkdownDocument,
   type RecoveryCandidate,
   reloadMarkdownFile,
+  requestQuit,
   saveMarkdownFile,
   saveRecoverySnapshot,
   syncNativeViewMenu,
@@ -606,6 +609,23 @@ function App() {
     [buildSnapshot, replaceAllTabs, settings],
   );
 
+  /** Closes this window after the unsaved-changes question; false if kept. */
+  const closeThisWindow = useCallback(async () => {
+    if (!(await dirtyTabsCanClose(tabsRef.current.map((tab) => tab.id)))) {
+      return false;
+    }
+
+    // Until the restore question is answered, the snapshot is the only copy
+    // of the previous session's unsaved text: keep it so the question comes
+    // back on the next start.
+    if (recoveryReadyRef.current) {
+      await discardRecoverySnapshot().catch(() => undefined);
+    }
+
+    await closeCurrentWindow();
+    return true;
+  }, [dirtyTabsCanClose]);
+
   const handleAction = useCallback(
     async (action: MenuAction) => {
       setOpenMenuId(null);
@@ -637,16 +657,13 @@ function App() {
           await closeTab(activeTab.id);
           break;
         case "close-window":
+          await closeThisWindow();
+          break;
         case "quit":
-          if (await dirtyTabsCanClose(tabsRef.current.map((tab) => tab.id))) {
-            // Until the restore question is answered, the snapshot is the
-            // only copy of the previous session's unsaved text: keep it so
-            // the question comes back on the next start.
-            if (recoveryReadyRef.current) {
-              await discardRecoverySnapshot().catch(() => undefined);
-            }
-
-            await closeCurrentWindow();
+          // Inside Tauri every window is asked in turn; in a browser only
+          // this one can close.
+          if (!(await requestQuit())) {
+            await closeThisWindow();
           }
           break;
         case "cut":
@@ -723,7 +740,7 @@ function App() {
       activeTab,
       addTab,
       closeTab,
-      dirtyTabsCanClose,
+      closeThisWindow,
       openFile,
       readingMode,
       saveTab,
@@ -746,6 +763,47 @@ function App() {
   useEffect(() => {
     handleActionRef.current = handleAction;
   }, [handleAction]);
+
+  const closeThisWindowRef = useRef(closeThisWindow);
+
+  useEffect(() => {
+    closeThisWindowRef.current = closeThisWindow;
+  }, [closeThisWindow]);
+
+  // Quitting the app reaches each window in turn; keeping this window open
+  // (Cancel, or a failed save) stops the quit for the remaining windows.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    listenToQuitRequested(() => {
+      void (async () => {
+        let closed = false;
+
+        try {
+          closed = await closeThisWindowRef.current();
+        } catch (error) {
+          await showError(errorMessage(error));
+        }
+
+        if (!closed) {
+          await cancelQuit().catch(() => undefined);
+        }
+      })();
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup?.();
+        return;
+      }
+
+      unlisten = cleanup;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [showError]);
 
   useEffect(() => {
     recoveryDialogRef.current = recoveryDialog;
@@ -983,7 +1041,12 @@ function App() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
-      if (choiceDialogRef.current || recoveryDialogRef.current) {
+      // A key the editor already handled must not run a second action.
+      if (
+        event.defaultPrevented ||
+        choiceDialogRef.current ||
+        recoveryDialogRef.current
+      ) {
         return;
       }
 

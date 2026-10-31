@@ -563,6 +563,39 @@ export async function closeCurrentWindow() {
   window.close();
 }
 
+/**
+ * Starts quitting the whole app: each editor window is asked in turn to
+ * close (with its own unsaved-changes question). Returns false outside Tauri,
+ * where only the current window can be closed.
+ */
+export async function requestQuit() {
+  if (!isTauriRuntime()) {
+    return false;
+  }
+
+  await invoke("request_quit");
+  return true;
+}
+
+/** Tells the Rust side this window stays open, which stops the quit. */
+export async function cancelQuit() {
+  if (isTauriRuntime()) {
+    await invoke("cancel_quit");
+  }
+}
+
+export async function listenToQuitRequested(
+  onQuitRequested: () => void,
+): Promise<UnlistenFn | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  return getCurrentWebviewWindow().listen("quit-requested", () => {
+    onQuitRequested();
+  });
+}
+
 export async function listenToCloseRequested(
   onCloseRequested: () => void,
 ): Promise<UnlistenFn | null> {

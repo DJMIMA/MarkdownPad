@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { markdown } from "@codemirror/lang-markdown";
-import { EditorState } from "@codemirror/state";
+import { EditorState, type Transaction } from "@codemirror/state";
 import { GFM } from "@lezer/markdown";
 import {
+  indentListItems,
   isEmptyBlockquoteMarkerLine,
+  outdentListItems,
   isPlainListContinuationLine,
   listContinuationIndentForPosition,
 } from "../src/editor/markdownKeymap.ts";
@@ -73,4 +75,66 @@ test("continuation paragraph indentation aligns with task list content", () => {
   const state = markdownState("- [ ] item");
 
   assert.equal(listContinuationIndentForPosition(state, state.doc.length), "      ");
+});
+
+function runCommand(
+  command: typeof indentListItems,
+  doc: string,
+  anchor: number,
+  head = anchor,
+) {
+  let state = EditorState.create({ doc, selection: { anchor, head } });
+  const handled = command({
+    state,
+    dispatch: (transaction: Transaction) => {
+      state = transaction.state;
+    },
+  });
+
+  return { handled, doc: state.doc.toString() };
+}
+
+test("Tab nests a list item under the item above it, children included", () => {
+  const doc = "- one\n- two\n  - child\n- three";
+  const at = doc.indexOf("two");
+
+  assert.deepEqual(runCommand(indentListItems, doc, at), {
+    handled: true,
+    doc: "- one\n  - two\n    - child\n- three",
+  });
+});
+
+test("Tab indents ordered items to the parent's text column", () => {
+  const doc = "1. one\n2. two";
+
+  assert.equal(runCommand(indentListItems, doc, doc.length).doc, "1. one\n   2. two");
+});
+
+test("Tab on the first item keeps the focus but changes nothing", () => {
+  assert.deepEqual(runCommand(indentListItems, "- only", 3), {
+    handled: true,
+    doc: "- only",
+  });
+});
+
+test("Tab outside a list is left to the default handling", () => {
+  assert.equal(runCommand(indentListItems, "plain text", 3).handled, false);
+});
+
+test("Shift+Tab moves an item out to its parent's level", () => {
+  const doc = "- one\n  - two\n    - child\n- three";
+
+  assert.equal(
+    runCommand(outdentListItems, doc, doc.indexOf("two")).doc,
+    "- one\n- two\n  - child\n- three",
+  );
+});
+
+test("Tab indents every selected item once", () => {
+  const doc = "- a\n- b\n- c";
+
+  assert.equal(
+    runCommand(indentListItems, doc, doc.indexOf("b"), doc.length).doc,
+    "- a\n  - b\n  - c",
+  );
 });

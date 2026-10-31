@@ -1204,6 +1204,30 @@ const visualLineClickHandler = EditorView.domEventHandlers({
   },
 });
 
+function lineTouchesStructuralBlock(state: EditorState, lineNumber: number) {
+  const line = state.doc.line(lineNumber);
+  let found = false;
+
+  syntaxTree(state).iterate({
+    from: line.from,
+    to: line.to,
+    enter(node) {
+      if (isStructuralBlock(node.name)) {
+        found = true;
+      }
+
+      return !found;
+    },
+  });
+
+  return found;
+}
+
+// Up / Down normally move by visual line, as in any editor, so the caret can
+// walk through a wrapped paragraph. Only a move into, out of or within a
+// table, code block or rule goes by source line: those blocks switch between
+// a rendered widget and their source, and CodeMirror's coordinate-based
+// motion would jump past them.
 function moveBySourceLine(view: EditorView, direction: "down" | "up") {
   const selection = view.state.selection.main;
 
@@ -1217,6 +1241,24 @@ function moveBySourceLine(view: EditorView, direction: "down" | "up") {
     : line.number - 1;
 
   if (targetLineNumber < 1 || targetLineNumber > view.state.doc.lines) {
+    return false;
+  }
+
+  const visualMove = view.moveVertically(selection, direction === "down");
+
+  if (
+    visualMove.head !== selection.head &&
+    visualMove.head >= line.from &&
+    visualMove.head <= line.to
+  ) {
+    // Still inside the same (wrapped) line.
+    return false;
+  }
+
+  if (
+    !lineTouchesStructuralBlock(view.state, line.number) &&
+    !lineTouchesStructuralBlock(view.state, targetLineNumber)
+  ) {
     return false;
   }
 
