@@ -58,6 +58,9 @@ export async function installTauriMock(page, { label = "main", responses = {} } 
         unregisterCallback(id) {
           callbacks.delete(id);
         },
+        convertFileSrc(path, protocol = "asset") {
+          return `http://${protocol}.localhost/${encodeURIComponent(path)}`;
+        },
         async invoke(command, args) {
           mock.calls.push({ command, args: structuredClone(args ?? {}) });
 

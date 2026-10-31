@@ -34,6 +34,7 @@ import {
   type RecoveryCandidate,
   reloadMarkdownFile,
   requestQuit,
+  resolveImageSource,
   saveMarkdownFile,
   saveRecoverySnapshot,
   syncNativeViewMenu,
@@ -660,7 +661,9 @@ function App() {
         case "print": {
           const { markdownPrintDocument } = await import("./markdown");
           await printMarkdownDocument(
-            markdownPrintDocument(activeTab.content, activeTab.title),
+            markdownPrintDocument(activeTab.content, activeTab.title, (source) =>
+              resolveImageSource(source, activeTab.path),
+            ),
           );
           break;
         }
@@ -1158,6 +1161,7 @@ function App() {
           ref={editorRef}
           docId={activeTab.id}
           openDocIds={openTabIds}
+          documentPath={activeTab.path}
           value={activeTab.content}
           cursor={activeTab.cursor}
           scroll={activeTab.scroll}

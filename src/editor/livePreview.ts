@@ -9,6 +9,7 @@ import type { Range, Text } from "@codemirror/state";
 import {
   EditorSelection,
   EditorState,
+  Facet,
   RangeSetBuilder,
   StateField,
   type Transaction,
@@ -28,10 +29,6 @@ import { isReadingMode, readingModeChangeGuard } from "./readingMode.ts";
 type SourceRange = {
   from: number;
   to: number;
-};
-
-type TableCellSource = SourceRange & {
-  text: string;
 };
 
 type TableCellPosition = {
@@ -243,6 +240,7 @@ export function searchMatchRanges(
 
 interface StructuralBlock extends SourceRange {
   name: string;
+  node: SyntaxNode;
   /** The block shows its Markdown source instead of a rendered widget. */
   revealed: boolean;
   /** Search matches inside the block, while the search panel is open. */
@@ -270,7 +268,14 @@ function structuralBlocks(state: EditorState, from: number, to: number): Structu
           ) ||
           (node.name === "HorizontalRule" && matches.length > 0);
 
-        blocks.push({ name: node.name, from: node.from, to: node.to, revealed, matches });
+        blocks.push({
+          name: node.name,
+          node: node.node,
+          from: node.from,
+          to: node.to,
+          revealed,
+          matches,
+        });
         return false;
       }
 
@@ -1453,112 +1458,269 @@ const sourceLineNavigation = ViewPlugin.fromClass(
   },
 );
 
-function parseCodeFence(markdown: string) {
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
-  const firstLine = lines[0] ?? "";
-  const language = firstLine.replace(/^(```+|~~~+)/, "").trim();
-  const body = lines.length > 2 ? lines.slice(1, -1).join("\n") : "";
+type InlineStyle = "strong" | "em" | "del" | "code";
 
-  return {
-    language,
-    body,
-  };
+/** A piece of rendered cell text with its source position and styling. */
+export interface InlineRun {
+  from: number;
+  to: number;
+  text: string;
+  styles: InlineStyle[];
+  url: string | null;
 }
 
-function trimCellSource(line: string, from: number, to: number) {
-  let cellFrom = from;
-  let cellTo = to;
+export type TableAlignment = "left" | "center" | "right" | null;
 
-  while (cellFrom < cellTo && /\s/.test(line[cellFrom] ?? "")) {
-    cellFrom += 1;
-  }
-
-  while (cellTo > cellFrom && /\s/.test(line[cellTo - 1] ?? "")) {
-    cellTo -= 1;
-  }
-
-  return {
-    from: cellFrom,
-    to: cellTo,
-    text: line.slice(cellFrom, cellTo),
-  };
+export interface TableCellModel {
+  from: number;
+  to: number;
+  runs: InlineRun[];
 }
 
-function splitTableRowWithSource(line: string, lineStart: number) {
-  const segments: SourceRange[] = [];
-  let segmentStart = 0;
+export interface TableModel {
+  alignments: TableAlignment[];
+  header: TableCellModel[];
+  rows: TableCellModel[][];
+}
 
-  for (let index = 0; index < line.length; index += 1) {
-    if (line[index] === "|") {
-      segments.push({
-        from: segmentStart,
-        to: index,
-      });
-      segmentStart = index + 1;
+const inlineStyleForNode: Record<string, InlineStyle> = {
+  StrongEmphasis: "strong",
+  Emphasis: "em",
+  Strikethrough: "del",
+  InlineCode: "code",
+};
+
+/**
+ * Splits the inline Markdown in from..to into rendered runs: emphasis,
+ * strike-through, code and links keep their meaning, their marks and URLs
+ * are dropped, and escapes show only the escaped character.
+ */
+export function inlineRuns(state: EditorState, from: number, to: number): InlineRun[] {
+  const hidden: SourceRange[] = [];
+  const styled: Array<SourceRange & { style?: InlineStyle; url?: string }> = [];
+
+  syntaxTree(state).iterate({
+    from,
+    to,
+    enter(node) {
+      if (node.from < from || node.to > to) {
+        return;
+      }
+
+      const style = inlineStyleForNode[node.name];
+
+      if (style) {
+        styled.push({ from: node.from, to: node.to, style });
+
+        // Inside a table, `\|` in code is the escape for a literal pipe.
+        if (style === "code") {
+          const text = state.doc.sliceString(node.from, node.to);
+
+          for (let index = text.indexOf("\\|"); index >= 0; index = text.indexOf("\\|", index + 2)) {
+            hidden.push({ from: node.from + index, to: node.from + index + 1 });
+          }
+        }
+      } else if (node.name === "Link") {
+        const url = urlTextForNode(state, node.node);
+
+        if (url) {
+          styled.push({ from: node.from, to: node.to, url });
+        }
+      } else if (
+        node.name === "EmphasisMark" ||
+        node.name === "StrikethroughMark" ||
+        node.name === "CodeMark" ||
+        node.name === "LinkMark" ||
+        node.name === "LinkTitle" ||
+        (node.name === "URL" &&
+          (node.node.parent?.name === "Link" || node.node.parent?.name === "Image"))
+      ) {
+        hidden.push({ from: node.from, to: node.to });
+      } else if (node.name === "Escape") {
+        hidden.push({ from: node.from, to: node.from + 1 });
+      }
+    },
+  });
+
+  const boundaries = new Set<number>([from, to]);
+
+  for (const range of [...hidden, ...styled]) {
+    boundaries.add(Math.max(from, range.from));
+    boundaries.add(Math.min(to, range.to));
+  }
+
+  const points = [...boundaries].sort((first, second) => first - second);
+  const runs: InlineRun[] = [];
+
+  for (let index = 0; index + 1 < points.length; index += 1) {
+    const runFrom = points[index];
+    const runTo = points[index + 1];
+
+    if (
+      runTo <= runFrom ||
+      hidden.some((range) => range.from <= runFrom && runTo <= range.to)
+    ) {
+      continue;
     }
+
+    const covering = styled.filter((range) => range.from <= runFrom && runTo <= range.to);
+    const styles = (["strong", "em", "del", "code"] as const).filter((style) =>
+      covering.some((range) => range.style === style),
+    );
+    const url = covering.find((range) => range.url)?.url ?? null;
+    const previous = runs[runs.length - 1];
+
+    if (
+      previous &&
+      previous.to === runFrom &&
+      previous.url === url &&
+      previous.styles.join() === styles.join()
+    ) {
+      previous.to = runTo;
+      previous.text += state.doc.sliceString(runFrom, runTo);
+      continue;
+    }
+
+    runs.push({
+      from: runFrom,
+      to: runTo,
+      text: state.doc.sliceString(runFrom, runTo),
+      styles: [...styles],
+      url,
+    });
   }
 
-  segments.push({
-    from: segmentStart,
-    to: line.length,
-  });
+  return runs;
+}
 
-  if (line.trimStart().startsWith("|")) {
-    segments.shift();
-  }
+function tableAlignments(delimiterRow: string): TableAlignment[] {
+  const cells = delimiterRow.trim().replace(/^\|/, "").replace(/\|$/, "").split("|");
 
-  if (line.trimEnd().endsWith("|")) {
-    segments.pop();
-  }
+  return cells.map((cell) => {
+    const spec = cell.trim();
+    const left = spec.startsWith(":");
+    const right = spec.endsWith(":") && spec.length > 1;
 
-  return segments.map((segment) => {
-    const cell = trimCellSource(line, segment.from, segment.to);
+    if (left && right) {
+      return "center";
+    }
 
-    return {
-      from: lineStart + cell.from,
-      to: lineStart + cell.to,
-      text: cell.text,
-    };
+    return right ? "right" : left ? "left" : null;
   });
 }
 
-function sourceLines(markdown: string) {
-  const normalized = markdown.replace(/\r\n/g, "\n");
-  const lines = normalized.split("\n");
-  let offset = 0;
+/**
+ * Reads a GFM table from the syntax tree. Lezer leaves out empty cells, so
+ * columns are counted from the pipes; rows are padded or cut to the header's
+ * column count, as GFM renders them.
+ */
+export function tableModel(state: EditorState, table: SyntaxNode): TableModel {
+  let alignments: TableAlignment[] = [];
+  const rows: TableCellModel[][] = [];
 
-  return lines.map((line) => {
-    const sourceLine = {
-      text: line,
-      from: offset,
-    };
-    offset += line.length + 1;
-    return sourceLine;
-  });
-}
+  for (let row = table.firstChild; row; row = row.nextSibling) {
+    if (row.name === "TableDelimiter") {
+      alignments = tableAlignments(state.doc.sliceString(row.from, row.to));
+      continue;
+    }
 
-function parseMarkdownTable(markdown: string) {
-  const lines = sourceLines(markdown).filter((line) => line.text.trim());
+    if (row.name !== "TableHeader" && row.name !== "TableRow") {
+      continue;
+    }
 
-  if (lines.length < 2) {
-    return {
-      headers: [],
-      rows: [],
-      headerCells: [],
-      rowCells: [],
-    };
+    const cells: TableCellModel[] = [];
+    let column = 0;
+    let segmentStart = row.from;
+    let sawContent = false;
+
+    for (let child = row.firstChild; child; child = child.nextSibling) {
+      if (child.name === "TableDelimiter") {
+        const leading = !sawContent && child.from === row.from;
+
+        if (!leading) {
+          cells[column] ??= { from: segmentStart, to: segmentStart, runs: [] };
+          column += 1;
+        }
+
+        // An empty cell starts after the pipe and its padding space.
+        segmentStart = state.doc.sliceString(child.to, child.to + 1) === " "
+          ? child.to + 1
+          : child.to;
+        sawContent = true;
+        continue;
+      }
+
+      if (child.name === "TableCell") {
+        cells[column] = {
+          from: child.from,
+          to: child.to,
+          runs: inlineRuns(state, child.from, child.to),
+        };
+        sawContent = true;
+      }
+    }
+
+    const lastChild = row.lastChild;
+
+    if (lastChild && lastChild.name !== "TableDelimiter") {
+      cells[column] ??= { from: segmentStart, to: segmentStart, runs: [] };
+    }
+
+    rows.push(Array.from(cells, (cell) => cell ?? { from: row.to, to: row.to, runs: [] }));
   }
 
-  const headerCells = splitTableRowWithSource(lines[0].text, lines[0].from);
-  const rowCells = lines
-    .slice(2)
-    .map((line) => splitTableRowWithSource(line.text, line.from));
+  const header = rows.shift() ?? [];
+  const columns = header.length;
+  const padded = rows.map((cells) => {
+    // Missing cells sit at the end of the row's last cell.
+    const end = cells.length > 0 ? cells[cells.length - 1].to : table.to;
+
+    return Array.from(
+      { length: columns },
+      (_, index) => cells[index] ?? { from: end, to: end, runs: [] },
+    );
+  });
 
   return {
-    headers: headerCells.map((cell) => cell.text),
-    rows: rowCells.map((row) => row.map((cell) => cell.text)),
-    headerCells,
-    rowCells,
+    alignments: Array.from({ length: columns }, (_, index) => alignments[index] ?? null),
+    header,
+    rows: padded,
+  };
+}
+
+export interface CodeBlockModel {
+  language: string;
+  /** Code lines with their document offsets (fence indentation removed). */
+  lines: Array<{ from: number; text: string }>;
+}
+
+/**
+ * The code of a fenced block. A block without a closing fence (still being
+ * typed, or at the end of the file) keeps its last line.
+ */
+export function codeBlockModel(state: EditorState, from: number, to: number): CodeBlockModel {
+  const firstLine = state.doc.lineAt(from);
+  const lastLine = state.doc.lineAt(to);
+  const opening = /^([ \t]*)(`{3,}|~{3,})(.*)$/.exec(firstLine.text);
+  const indent = opening?.[1].length ?? 0;
+  const fence = opening?.[2] ?? "```";
+  const closing = new RegExp(`^[ \\t]*${fence[0] === "`" ? "`" : "~"}{${fence.length},}[ \\t]*$`);
+  const closed = lastLine.number > firstLine.number && closing.test(lastLine.text);
+  const lines: CodeBlockModel["lines"] = [];
+
+  for (
+    let number = firstLine.number + 1;
+    number <= (closed ? lastLine.number - 1 : lastLine.number);
+    number += 1
+  ) {
+    const line = state.doc.line(number);
+    const strip = Math.min(indent, /^[ ]*/.exec(line.text)?.[0].length ?? 0);
+    lines.push({ from: line.from + strip, text: line.text.slice(strip) });
+  }
+
+  return {
+    language: (opening?.[3] ?? "").trim(),
+    lines,
   };
 }
 
@@ -1639,24 +1801,21 @@ class TaskMarkerWidget extends WidgetType {
 }
 
 class CodeBlockWidget extends WidgetType {
-  private readonly language: string;
-  private readonly body: string;
+  private readonly model: CodeBlockModel;
   private readonly editAt: number;
   private readonly matches: SourceRange[];
   private readonly selected: SourceRange | null;
   private readonly readOnly: boolean;
 
   constructor(
-    markdown: string,
+    model: CodeBlockModel,
     editAt: number,
     matches: SourceRange[] = [],
     selected: SourceRange | null = null,
     readOnly = false,
   ) {
     super();
-    const parsed = parseCodeFence(markdown);
-    this.language = parsed.language;
-    this.body = parsed.body;
+    this.model = model;
     this.editAt = editAt;
     this.matches = matches;
     this.selected = selected;
@@ -1667,18 +1826,15 @@ class CodeBlockWidget extends WidgetType {
     return (
       widget instanceof CodeBlockWidget &&
       widget.readOnly === this.readOnly &&
-      widget.language === this.language &&
-      widget.body === this.body &&
       widget.editAt === this.editAt &&
+      JSON.stringify(widget.model) === JSON.stringify(this.model) &&
       sameRanges(widget.matches, this.matches) &&
       sameRange(widget.selected, this.selected)
     );
   }
 
   get estimatedHeight() {
-    const lines = Math.max(1, this.body.split("\n").length);
-
-    return lines * 23 + 64;
+    return Math.max(1, this.model.lines.length) * 23 + 64;
   }
 
   private handlePointerDown(event: MouseEvent, view: EditorView) {
@@ -1753,18 +1909,25 @@ class CodeBlockWidget extends WidgetType {
       });
     }
 
-    if (this.language) {
+    if (this.model.language) {
       const label = document.createElement("span");
       label.className = "cm-md-code-language";
-      label.textContent = this.language;
+      label.textContent = this.model.language;
       wrapper.append(label);
     }
 
     const pre = document.createElement("pre");
     const code = document.createElement("code");
-    code.append(
-      highlightedTextFragment(this.body, this.editAt, this.matches, this.selected),
-    );
+
+    this.model.lines.forEach((line, index) => {
+      if (index > 0) {
+        code.append(textNode("\n"));
+      }
+
+      code.append(
+        highlightedTextFragment(line.text, line.from, this.matches, this.selected),
+      );
+    });
     pre.append(code);
     wrapper.append(pre);
 
@@ -1772,29 +1935,83 @@ class CodeBlockWidget extends WidgetType {
   }
 }
 
+function renderInlineRuns(
+  runs: InlineRun[],
+  matches: SourceRange[],
+  selected: SourceRange | null,
+) {
+  const fragment = document.createDocumentFragment();
+  let index = 0;
+
+  // Consecutive runs with the same styling share one element, so a hidden
+  // escape inside code does not split the code box in two.
+  while (index < runs.length) {
+    const first = runs[index];
+    const key = `${first.styles.join()}|${first.url ?? ""}`;
+    let node: Node = document.createDocumentFragment();
+
+    while (
+      index < runs.length &&
+      `${runs[index].styles.join()}|${runs[index].url ?? ""}` === key
+    ) {
+      node.appendChild(
+        highlightedTextFragment(runs[index].text, runs[index].from, matches, selected),
+      );
+      index += 1;
+    }
+
+    const wrap = (element: HTMLElement) => {
+      element.append(node);
+      node = element;
+    };
+
+    if (first.styles.includes("code")) {
+      const code = document.createElement("code");
+      code.className = "cm-md-inline-code";
+      wrap(code);
+    }
+
+    if (first.styles.includes("del")) {
+      wrap(document.createElement("del"));
+    }
+
+    if (first.styles.includes("em")) {
+      wrap(document.createElement("em"));
+    }
+
+    if (first.styles.includes("strong")) {
+      wrap(document.createElement("strong"));
+    }
+
+    if (first.url) {
+      const link = document.createElement("span");
+      link.className = "cm-md-clickable-link";
+      link.dataset.markdownUrl = first.url;
+      wrap(link);
+    }
+
+    fragment.append(node);
+  }
+
+  return fragment;
+}
+
 class TableWidget extends WidgetType {
-  private readonly headers: string[];
-  private readonly rows: string[][];
-  private readonly headerCells: TableCellSource[];
-  private readonly rowCells: TableCellSource[][];
+  private readonly model: TableModel;
   private readonly editAt: number;
   private readonly matches: SourceRange[];
   private readonly selected: SourceRange | null;
   private readonly readOnly: boolean;
 
   constructor(
-    markdown: string,
+    model: TableModel,
     editAt: number,
     matches: SourceRange[] = [],
     selected: SourceRange | null = null,
     readOnly = false,
   ) {
     super();
-    const parsed = parseMarkdownTable(markdown);
-    this.headers = parsed.headers;
-    this.rows = parsed.rows;
-    this.headerCells = parsed.headerCells;
-    this.rowCells = parsed.rowCells;
+    this.model = model;
     this.editAt = editAt;
     this.matches = matches;
     this.selected = selected;
@@ -1802,7 +2019,7 @@ class TableWidget extends WidgetType {
   }
 
   get estimatedHeight() {
-    const visibleRows = Math.max(1, this.rows.length + 1);
+    const visibleRows = Math.max(1, this.model.rows.length + 1);
 
     return visibleRows * 40 + 30;
   }
@@ -1811,26 +2028,10 @@ class TableWidget extends WidgetType {
     return (
       widget instanceof TableWidget &&
       widget.readOnly === this.readOnly &&
-      JSON.stringify(widget.headers) === JSON.stringify(this.headers) &&
-      JSON.stringify(widget.rows) === JSON.stringify(this.rows) &&
-      JSON.stringify(widget.headerCells) === JSON.stringify(this.headerCells) &&
-      JSON.stringify(widget.rowCells) === JSON.stringify(this.rowCells) &&
       widget.editAt === this.editAt &&
+      JSON.stringify(widget.model) === JSON.stringify(this.model) &&
       sameRanges(widget.matches, this.matches) &&
       sameRange(widget.selected, this.selected)
-    );
-  }
-
-  private cellContent(source: TableCellSource | undefined, fallback: string) {
-    if (!source) {
-      return textNode(fallback);
-    }
-
-    return highlightedTextFragment(
-      source.text,
-      this.editAt + source.from,
-      this.matches,
-      this.selected,
     );
   }
 
@@ -1859,13 +2060,22 @@ class TableWidget extends WidgetType {
     return Math.round(sourceFrom + (sourceTo - sourceFrom) * ratio);
   }
 
-  private applyCellSource(cell: HTMLElement, source?: TableCellSource) {
-    if (!source) {
-      return;
+  private fillCell(
+    cell: HTMLElement,
+    model: TableCellModel,
+    position: TableCellPosition,
+  ) {
+    cell.dataset.sourceFrom = String(model.from);
+    cell.dataset.sourceTo = String(model.to);
+    this.applyCellPosition(cell, position);
+
+    const alignment = this.model.alignments[position.column];
+
+    if (alignment) {
+      cell.style.textAlign = alignment;
     }
 
-    cell.dataset.sourceFrom = String(this.editAt + source.from);
-    cell.dataset.sourceTo = String(this.editAt + source.to);
+    cell.append(renderInlineRuns(model.runs, this.matches, this.selected));
   }
 
   private applyCellPosition(
@@ -2099,6 +2309,24 @@ class TableWidget extends WidgetType {
     const wrapper = document.createElement("div");
     wrapper.className = "cm-md-table-wrapper";
 
+    // Links in cells open on click, in both modes.
+    wrapper.addEventListener("mousedown", (event) => {
+      const link = event.button === 0 && event.target instanceof Element
+        ? event.target.closest<HTMLElement>("[data-markdown-url]")
+        : null;
+
+      if (link?.dataset.markdownUrl) {
+        event.preventDefault();
+        event.stopPropagation();
+        dispatchOpenUrl(link.dataset.markdownUrl);
+        return;
+      }
+
+      if (!this.readOnly) {
+        this.handleTablePointerDown(event, view, wrapper);
+      }
+    });
+
     // In reading mode the table stays rendered: clicks select cell text
     // natively instead of revealing the source or starting a cell selection.
     if (!this.readOnly) {
@@ -2107,9 +2335,6 @@ class TableWidget extends WidgetType {
       wrapper.ariaLabel = "表を Markdown ソースで編集";
       wrapper.title = "クリックして Markdown ソースで編集";
 
-      wrapper.addEventListener("mousedown", (event) =>
-        this.handleTablePointerDown(event, view, wrapper),
-      );
       wrapper.addEventListener("contextmenu", (event) =>
         this.handleTableContextMenu(event, view, wrapper),
       );
@@ -2124,14 +2349,9 @@ class TableWidget extends WidgetType {
     const thead = document.createElement("thead");
     const headerRow = document.createElement("tr");
 
-    for (const [index, header] of this.headers.entries()) {
+    for (const [index, header] of this.model.header.entries()) {
       const cell = document.createElement("th");
-      this.applyCellSource(cell, this.headerCells[index]);
-      this.applyCellPosition(cell, {
-        row: 0,
-        column: index,
-      });
-      cell.append(this.cellContent(this.headerCells[index], header));
+      this.fillCell(cell, header, { row: 0, column: index });
       headerRow.append(cell);
     }
 
@@ -2140,19 +2360,12 @@ class TableWidget extends WidgetType {
 
     const tbody = document.createElement("tbody");
 
-    for (const [rowIndex, row] of this.rows.entries()) {
+    for (const [rowIndex, row] of this.model.rows.entries()) {
       const tableRow = document.createElement("tr");
 
-      for (const [cellIndex, cellValue] of row.entries()) {
+      for (const [cellIndex, cellModel] of row.entries()) {
         const cell = document.createElement("td");
-        this.applyCellSource(cell, this.rowCells[rowIndex]?.[cellIndex]);
-        this.applyCellPosition(cell, {
-          row: rowIndex + 1,
-          column: cellIndex,
-        });
-        cell.append(
-          this.cellContent(this.rowCells[rowIndex]?.[cellIndex], cellValue),
-        );
+        this.fillCell(cell, cellModel, { row: rowIndex + 1, column: cellIndex });
         tableRow.append(cell);
       }
 
@@ -2217,6 +2430,18 @@ class HorizontalRuleWidget extends WidgetType {
   }
 }
 
+/**
+ * Turns an image source from the document into a URL the webview can load
+ * (relative and local paths need the document's folder and the platform's
+ * file URL scheme). Null hides the image. Provided by the editor per tab.
+ */
+export const imageSourceResolver = Facet.define<
+  (source: string) => string | null,
+  (source: string) => string | null
+>({
+  combine: (values) => values[0] ?? ((source) => source),
+});
+
 class ImageWidget extends WidgetType {
   private readonly alt: string;
   private readonly url: string;
@@ -2255,13 +2480,24 @@ class ImageWidget extends WidgetType {
   }
 }
 
-function imageParts(markdown: string) {
-  const match = /^!\[(.*)]\((.*)\)$/.exec(markdown.trim());
+/** The alt text and destination of an image node (title and <> dropped). */
+export function imageParts(state: EditorState, node: SyntaxNode) {
+  const marks: SyntaxNode[] = [];
+  let url = "";
 
-  return {
-    alt: match?.[1] ?? "",
-    url: match?.[2] ?? "",
-  };
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.name === "LinkMark") {
+      marks.push(child);
+    } else if (child.name === "URL") {
+      url = state.doc.sliceString(child.from, child.to).replace(/^<(.*)>$/, "$1");
+    }
+  }
+
+  const alt = marks.length >= 2
+    ? state.doc.sliceString(marks[0].to, marks[1].from)
+    : "";
+
+  return { alt, url };
 }
 
 function listLineDecoration(className: string, indentEm: number, markerEm: number) {
@@ -2494,7 +2730,6 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
       continue;
     }
 
-    const text = state.doc.sliceString(block.from, block.to);
     const firstLine = state.doc.lineAt(block.from);
     const editAt =
       block.name === "FencedCode" && firstLine.to < block.to
@@ -2510,11 +2745,27 @@ function buildBlockDecorations(state: EditorState): DecorationSet {
     let widget: WidgetType;
 
     if (block.name === "FencedCode") {
-      widget = new CodeBlockWidget(text, editAt, block.matches, blockSelected, readOnly);
+      widget = new CodeBlockWidget(
+        codeBlockModel(state, block.from, block.to),
+        editAt,
+        block.matches,
+        blockSelected,
+        readOnly,
+      );
     } else if (block.name === "Table") {
-      widget = new TableWidget(text, editAt, block.matches, blockSelected, readOnly);
+      widget = new TableWidget(
+        tableModel(state, block.node),
+        editAt,
+        block.matches,
+        blockSelected,
+        readOnly,
+      );
     } else {
-      widget = new HorizontalRuleWidget(text, editAt, readOnly);
+      widget = new HorizontalRuleWidget(
+        state.doc.sliceString(block.from, block.to),
+        editAt,
+        readOnly,
+      );
     }
 
     addDecoration(
@@ -2620,8 +2871,11 @@ function buildInlineDecorations(
       }
 
       if (node.name === "Image" && !isInSourceRange(node, sourceRanges.all)) {
-        const text = state.doc.sliceString(node.from, node.to);
-        const image = imageParts(text);
+        const parts = imageParts(state, node.node);
+        const image = {
+          alt: parts.alt,
+          url: parts.url ? state.facet(imageSourceResolver)(parts.url) : null,
+        };
 
         if (image.url) {
           addDecoration(

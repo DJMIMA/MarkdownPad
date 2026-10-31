@@ -10,8 +10,67 @@ export interface MarkdownPrintDocument {
 const renderer = new MarkdownIt({
   html: true,
   linkify: false,
-  typographer: true,
+  // Print what the editor shows: no smart quotes, (c) -> (C) or -- -> dash.
+  typographer: false,
 });
+
+type ImageResolver = (source: string) => string | null;
+
+// GFM task list items ("- [ ] todo", "- [x] done") print as check boxes,
+// like the editor shows them, instead of the literal brackets.
+renderer.core.ruler.after("inline", "markdownpad-task-lists", (state) => {
+  const tokens = state.tokens;
+
+  for (let index = 2; index < tokens.length; index += 1) {
+    const inline = tokens[index];
+
+    if (
+      inline.type !== "inline" ||
+      tokens[index - 1].type !== "paragraph_open" ||
+      tokens[index - 2].type !== "list_item_open"
+    ) {
+      continue;
+    }
+
+    const match = /^\[([ xX])\][ \t]+/.exec(inline.content);
+    const first = inline.children?.[0];
+
+    if (!match || !first || first.type !== "text" || !first.content.startsWith(match[0])) {
+      continue;
+    }
+
+    const checked = match[1] !== " ";
+    first.content = first.content.slice(match[0].length);
+    const box = new state.Token("html_inline", "", 0);
+    box.content = `<span class="task-box${checked ? " checked" : ""}" aria-hidden="true">${checked ? "☑" : "☐"}</span> `;
+    inline.children?.unshift(box);
+    tokens[index - 2].attrJoin("class", "task-list-item");
+  }
+});
+
+// Image paths are resolved like in the editor (relative to the file), since
+// the print window has no notion of the document's folder.
+const defaultImageRule = renderer.renderer.rules.image;
+
+renderer.renderer.rules.image = (tokens, index, options, env, self) => {
+  const token = tokens[index];
+  const source = token.attrGet("src");
+  const resolveImage = (env as { resolveImage?: ImageResolver } | undefined)?.resolveImage;
+
+  if (source && resolveImage) {
+    const resolved = resolveImage(String(source));
+
+    if (resolved) {
+      token.attrSet("src", resolved);
+    } else {
+      token.attrSet("src", "");
+    }
+  }
+
+  return defaultImageRule
+    ? defaultImageRule(tokens, index, options, env, self)
+    : self.renderToken(tokens, index, options);
+};
 
 const printStyles = `
   body {
@@ -65,6 +124,16 @@ const printStyles = `
     background: #f6f6f6;
   }
 
+  .markdown-print-document li.task-list-item {
+    list-style: none;
+  }
+
+  .markdown-print-document .task-box {
+    display: inline-block;
+    width: 1.2em;
+    margin-left: -1.3em;
+  }
+
   .markdown-print-document blockquote {
     margin-left: 0;
     padding-left: 1em;
@@ -106,6 +175,25 @@ const printStyles = `
       margin: 0;
       max-width: none;
     }
+
+    /* Paper cannot scroll: wrap long code lines and table cells instead of
+       cutting them off at the page edge. */
+    .markdown-print-document pre {
+      overflow: visible;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .markdown-print-document th,
+    .markdown-print-document td {
+      overflow-wrap: anywhere;
+    }
+
+    .markdown-print-document pre,
+    .markdown-print-document tr,
+    .markdown-print-document img {
+      break-inside: avoid;
+    }
   }
 `;
 
@@ -133,14 +221,21 @@ function escapeHtml(text: string) {
     .replace(/"/g, "&quot;");
 }
 
-export function markdownToSafeHtml(markdown: string) {
-  return sanitizeWithDomPurify(renderer.render(markdown));
+export function markdownToSafeHtml(
+  markdown: string,
+  resolveImage?: (source: string) => string | null,
+) {
+  return sanitizeWithDomPurify(renderer.render(markdown, { resolveImage }));
 }
 
-export function markdownPrintDocument(markdown: string, title: string) {
+export function markdownPrintDocument(
+  markdown: string,
+  title: string,
+  resolveImage?: (source: string) => string | null,
+) {
   return {
     title,
-    bodyHtml: markdownToSafeHtml(markdown),
+    bodyHtml: markdownToSafeHtml(markdown, resolveImage),
     styles: printStyles,
   };
 }

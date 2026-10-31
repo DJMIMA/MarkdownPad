@@ -4,8 +4,14 @@ import { markdown } from "@codemirror/lang-markdown";
 import { SearchQuery } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { GFM } from "@lezer/markdown";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
+import type { SyntaxNode } from "@lezer/common";
 import {
+  codeBlockModel,
   headingLevelForNode,
+  imageParts,
+  inlineRuns,
+  tableModel,
   isStructuralBlock,
   listMarkerLabel,
   listMarkerWidthEm,
@@ -176,4 +182,97 @@ test("splitTextByMatches clips matches to the text and ignores outside matches",
   assert.deepEqual(splitTextByMatches("needle", 100, [], null), [
     { text: "needle", match: false, selected: false },
   ]);
+});
+
+function parsedState(doc: string) {
+  const state = EditorState.create({
+    doc,
+    extensions: [markdown({ extensions: [GFM] })],
+  });
+  ensureSyntaxTree(state, state.doc.length, 5000);
+  return state;
+}
+
+function firstNode(state: EditorState, name: string): SyntaxNode {
+  let found: SyntaxNode | null = null;
+
+  syntaxTree(state).iterate({
+    enter(node) {
+      if (!found && node.name === name) {
+        found = node.node;
+      }
+
+      return !found;
+    },
+  });
+
+  assert.ok(found, `no ${name} node`);
+  return found;
+}
+
+function cellTexts(cells: { runs: { text: string }[] }[]) {
+  return cells.map((cell) => cell.runs.map((run) => run.text).join(""));
+}
+
+test("tableModel keeps escaped pipes in their cell, counts empty cells and pads rows", () => {
+  const state = parsedState(
+    "| a | b \\| c | `x \\| y` |\n| :-: | --: | --- |\n| **太字** |  | [l](https://e.com) | extra |\n| 1 |",
+  );
+  const model = tableModel(state, firstNode(state, "Table"));
+
+  assert.deepEqual(model.alignments, ["center", "right", null]);
+  assert.deepEqual(cellTexts(model.header), ["a", "b | c", "x | y"]);
+  assert.deepEqual(model.rows.map(cellTexts), [
+    ["太字", "", "l"],
+    ["1", "", ""],
+  ]);
+  assert.deepEqual(model.rows[0][0].runs[0].styles, ["strong"]);
+  assert.equal(model.rows[0][2].runs[0].url, "https://e.com");
+  assert.deepEqual(model.header[2].runs[0].styles, ["code"]);
+});
+
+test("inlineRuns hides marks and keeps source offsets for highlighting", () => {
+  const doc = "a *b* ~~c~~";
+  const runs = inlineRuns(parsedState(doc), 0, doc.length);
+
+  assert.deepEqual(
+    runs.map((run) => [run.text, run.styles.join(), doc.slice(run.from, run.to)]),
+    [
+      ["a ", "", "a "],
+      ["b", "em", "b"],
+      [" ", "", " "],
+      ["c", "del", "c"],
+    ],
+  );
+});
+
+test("codeBlockModel keeps the last line of an unclosed fence", () => {
+  const doc = "text\n\n```js\nconst a = 1;\nconst b = 2;";
+  const state = parsedState(doc);
+  const block = firstNode(state, "FencedCode");
+  const model = codeBlockModel(state, block.from, block.to);
+
+  assert.equal(model.language, "js");
+  assert.deepEqual(model.lines.map((line) => line.text), ["const a = 1;", "const b = 2;"]);
+  assert.equal(doc.slice(model.lines[1].from, model.lines[1].from + 5), "const");
+});
+
+test("codeBlockModel drops the closing fence and the list indentation", () => {
+  const doc = "- item\n\n  ```\n  code\n  ```\n";
+  const state = parsedState(doc);
+  const block = firstNode(state, "FencedCode");
+
+  assert.deepEqual(
+    codeBlockModel(state, block.from, block.to).lines.map((line) => line.text),
+    ["code"],
+  );
+});
+
+test("imageParts separates the URL from a title and angle brackets", () => {
+  const state = parsedState('![猫の写真](<images/cat 1.png> "タイトル")');
+
+  assert.deepEqual(imageParts(state, firstNode(state, "Image")), {
+    alt: "猫の写真",
+    url: "images/cat 1.png",
+  });
 });

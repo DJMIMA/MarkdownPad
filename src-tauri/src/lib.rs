@@ -253,13 +253,23 @@ fn read_markdown_file(path: &Path) -> Result<OpenedMarkdownFile, String> {
     })
 }
 
+/// Lets the frontend read and write `path`, and lets the editor show images
+/// from the file's folder (and below it) through the asset protocol.
+fn allow_user_file<R: Runtime>(app: &AppHandle<R>, path: &str) {
+    app.state::<FileAccess>().allow(path);
+
+    if let Some(directory) = Path::new(path).parent() {
+        let _ = app.asset_protocol_scope().allow_directory(directory, true);
+    }
+}
+
 /// Reads a file the user chose and allows the frontend to save back to it.
 fn open_user_file<R: Runtime>(
     app: &AppHandle<R>,
     path: &Path,
 ) -> Result<OpenedMarkdownFile, String> {
     let file = read_markdown_file(path)?;
-    app.state::<FileAccess>().allow(&file.path);
+    allow_user_file(app, &file.path);
     Ok(file)
 }
 
@@ -516,7 +526,6 @@ fn write_user_file(path: &Path, bytes: &[u8]) -> Result<Option<FileStamp>, Strin
 #[tauri::command]
 fn save_markdown_file_as_dialog<R: Runtime>(
     window: WebviewWindow<R>,
-    access: State<'_, FileAccess>,
     suggested_name: String,
     content: String,
     encoding: TextEncoding,
@@ -534,7 +543,7 @@ fn save_markdown_file_as_dialog<R: Runtime>(
     write_user_file(&path, &bytes)?;
     let canonical_path = text_file::canonical_path(&path);
     let path_text = canonical_path.to_string_lossy().to_string();
-    access.allow(&path_text);
+    allow_user_file(window.app_handle(), &path_text);
 
     Ok(SaveAsOutcome::Saved {
         title: file_title_from_path(&path),
@@ -609,7 +618,6 @@ async fn load_recovery_snapshots<R: Runtime>(
     app: AppHandle<R>,
     window: WebviewWindow<R>,
     recovery: State<'_, RecoveryState>,
-    access: State<'_, FileAccess>,
 ) -> Result<Vec<RecoveryCandidate>, String> {
     let app_data = app_data_dir(&app)?;
     let mut ids: Vec<(String, bool)> = Vec::new();
@@ -641,7 +649,7 @@ async fn load_recovery_snapshots<R: Runtime>(
 
             if let Some(snapshot) = &snapshot {
                 for tab_path in recovery::tab_paths(snapshot) {
-                    access.allow(&tab_path);
+                    allow_user_file(&app, &tab_path);
                 }
             }
 

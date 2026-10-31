@@ -43,7 +43,8 @@ import {
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { tags } from "@lezer/highlight";
-import { livePreview } from "./livePreview";
+import { imageSourceResolver, livePreview } from "./livePreview";
+import { resolveImageSource } from "../platform";
 import { markdownPadKeymap } from "./markdownKeymap";
 import { readingMode as readingModeExtension } from "./readingMode";
 
@@ -52,6 +53,8 @@ interface MarkdownEditorProps {
   docId: string;
   /** Ids of all open tabs, so the states of closed tabs can be dropped. */
   openDocIds: readonly string[];
+  /** The file shown, for resolving relative image paths. */
+  documentPath: string | null;
   value: string;
   cursor: {
     anchor: number;
@@ -359,6 +362,10 @@ const markdownHighlightStyle = HighlightStyle.define([
 const bodyFont =
   '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", system-ui, sans-serif';
 const monoFont = '"Cascadia Mono", "Consolas", "BIZ UDGothic", monospace';
+
+function imageResolverFor(documentPath: string | null) {
+  return imageSourceResolver.of((source) => resolveImageSource(source, documentPath));
+}
 
 // EditorView.theme mounts a new style rule set on every call, so build each
 // zoom / wrap combination once and reuse it (tab switches reapply the theme).
@@ -813,6 +820,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 function MarkdownEditor({
   docId,
   openDocIds,
+  documentPath,
   value,
   cursor,
   scroll,
@@ -838,11 +846,12 @@ function MarkdownEditor({
   // and search state never leak from one tab into another. (Swapping the text
   // of one shared state let Ctrl+Z pull the previous tab's text into a tab.)
   const inactiveStatesRef = useRef(new Map<string, EditorState>());
-  const settingsRef = useRef({ wordWrap, zoom, readingMode });
-  settingsRef.current = { wordWrap, zoom, readingMode };
+  const settingsRef = useRef({ wordWrap, zoom, readingMode, documentPath });
+  settingsRef.current = { wordWrap, zoom, readingMode, documentPath };
   const wrapCompartment = useMemo(() => new Compartment(), []);
   const themeCompartment = useMemo(() => new Compartment(), []);
   const readingCompartment = useMemo(() => new Compartment(), []);
+  const imageCompartment = useMemo(() => new Compartment(), []);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -990,11 +999,12 @@ function MarkdownEditor({
           wrapCompartment.of(settings.wordWrap ? EditorView.lineWrapping : []),
           themeCompartment.of(editorTheme(settings.zoom, settings.wordWrap)),
           readingCompartment.of(readingModeExtension(settings.readingMode)),
+          imageCompartment.of(imageResolverFor(settings.documentPath)),
           listeners,
         ],
       });
     },
-    [listeners, readingCompartment, themeCompartment, wrapCompartment],
+    [imageCompartment, listeners, readingCompartment, themeCompartment, wrapCompartment],
   );
 
   // A stored state keeps the settings it had when its tab was last shown;
@@ -1014,10 +1024,11 @@ function MarkdownEditor({
           readingCompartment.reconfigure(
             readingModeExtension(settings.readingMode),
           ),
+          imageCompartment.reconfigure(imageResolverFor(settings.documentPath)),
         ],
       });
     },
-    [readingCompartment, themeCompartment, wrapCompartment],
+    [imageCompartment, readingCompartment, themeCompartment, wrapCompartment],
   );
 
   const restoreScroll = useCallback(
@@ -1164,6 +1175,13 @@ function MarkdownEditor({
       effects: themeCompartment.reconfigure(editorTheme(zoom, wordWrap)),
     });
   }, [themeCompartment, wordWrap, zoom]);
+
+  // A tab saved under a new name resolves its relative images from there.
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: imageCompartment.reconfigure(imageResolverFor(documentPath)),
+    });
+  }, [documentPath, imageCompartment]);
 
   useEffect(() => {
     const view = viewRef.current;

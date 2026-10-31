@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import {
   WebviewWindow,
@@ -6,6 +6,7 @@ import {
 } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { MarkdownPrintDocument } from "./markdown";
+import { resolveImageReference } from "./paths";
 import { normalizeLineEndings } from "./state";
 import type {
   DocumentTab,
@@ -80,6 +81,18 @@ const printStorageKeyPrefix = "markdownpad.print.";
 
 export function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/** Image reference -> loadable URL for the document at `documentPath`. */
+export function resolveImageSource(
+  source: string,
+  documentPath: string | null,
+): string | null {
+  return resolveImageReference(
+    source,
+    documentPath,
+    isTauriRuntime() ? (path) => convertFileSrc(path) : null,
+  );
 }
 
 /** Turns an error from a command (a string from Rust) into a message. */
