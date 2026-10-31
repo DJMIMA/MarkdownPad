@@ -6,6 +6,7 @@ interface StatusBarProps {
   characters: number;
   words: number;
   wordWrap: boolean;
+  readingMode: boolean;
 }
 
 export function StatusBar({
@@ -16,10 +17,12 @@ export function StatusBar({
   characters,
   words,
   wordWrap,
+  readingMode,
 }: StatusBarProps) {
   return (
     <footer className="status-bar">
       <span>{path ?? "未保存の Markdown"}</span>
+      {readingMode ? <span>リーディングモード</span> : null}
       <span>
         行 {line}, 列 {column}
       </span>

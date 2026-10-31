@@ -24,6 +24,7 @@ export type MenuAction =
   | "zoom-in"
   | "zoom-out"
   | "zoom-reset"
+  | "toggle-reading-mode"
   | "toggle-word-wrap"
   | "toggle-status-bar";
 
@@ -436,6 +437,39 @@ export async function listenToCloseRequested(
   return getCurrentWindow().onCloseRequested((event) => {
     event.preventDefault();
     onCloseRequested();
+  });
+}
+
+export interface ViewMenuState {
+  readingMode: boolean;
+  wordWrap: boolean;
+  showStatusBar: boolean;
+}
+
+// Keeps the native View menu check marks in line with this window's state.
+export async function syncNativeViewMenu(state: ViewMenuState) {
+  if (!isTauriRuntime()) {
+    return;
+  }
+
+  try {
+    await invoke("sync_view_menu", { ...state });
+  } catch {
+    // A stale check mark is cosmetic; never let it break the editor.
+  }
+}
+
+export async function listenToWindowFocus(
+  onFocus: () => void,
+): Promise<UnlistenFn | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  return getCurrentWindow().onFocusChanged(({ payload: focused }) => {
+    if (focused) {
+      onFocus();
+    }
   });
 }
 

@@ -6,7 +6,9 @@ use std::{
 };
 
 use tauri::{
-    menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
+    menu::{
+        CheckMenuItem, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
+    },
     AppHandle, Emitter, Manager, Runtime,
 };
 use tauri_plugin_opener::OpenerExt;
@@ -328,6 +330,43 @@ fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), S
         .map_err(|error| format!("failed to open external URL: {error}"))
 }
 
+fn view_menu_check_item<R: Runtime>(menu: &Menu<R>, id: &str) -> Option<CheckMenuItem<R>> {
+    menu.items().ok()?.into_iter().find_map(|item| {
+        item.as_submenu()
+            .and_then(|submenu| submenu.get(id))
+            .and_then(|found| found.as_check_menuitem().cloned())
+    })
+}
+
+// Native check items flip themselves when clicked, but the frontend also
+// toggles these settings from keyboard shortcuts and owns their real state
+// (which can differ per window). The frontend calls this after every change
+// and when a window gains focus, so the check marks always match that window.
+#[tauri::command]
+fn sync_view_menu<R: Runtime>(
+    app: AppHandle<R>,
+    reading_mode: bool,
+    word_wrap: bool,
+    show_status_bar: bool,
+) -> Result<(), String> {
+    let Some(menu) = app.menu() else {
+        return Ok(());
+    };
+
+    for (id, checked) in [
+        ("toggle-reading-mode", reading_mode),
+        ("toggle-word-wrap", word_wrap),
+        ("toggle-status-bar", show_status_bar),
+    ] {
+        if let Some(item) = view_menu_check_item(&menu, id) {
+            item.set_checked(checked)
+                .map_err(|error| format!("failed to update view menu: {error}"))?;
+        }
+    }
+
+    Ok(())
+}
+
 fn markdownpad_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let new_tab = MenuItemBuilder::with_id("new-tab", "新しいタブ")
         .accelerator("Ctrl+N")
@@ -409,14 +448,25 @@ fn markdownpad_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let zoom_reset = MenuItemBuilder::with_id("zoom-reset", "既定値に戻す")
         .accelerator("Ctrl+0")
         .build(app)?;
+    let reading_mode = CheckMenuItemBuilder::with_id("toggle-reading-mode", "リーディングモード")
+        .accelerator("Ctrl+E")
+        .checked(false)
+        .build(app)?;
+    let word_wrap = CheckMenuItemBuilder::with_id("toggle-word-wrap", "右端で折り返す")
+        .checked(true)
+        .build(app)?;
+    let status_bar = CheckMenuItemBuilder::with_id("toggle-status-bar", "ステータスバー")
+        .checked(true)
+        .build(app)?;
 
     let view_menu = SubmenuBuilder::new(app, "表示")
         .item(&zoom_in)
         .item(&zoom_out)
         .item(&zoom_reset)
         .separator()
-        .check("toggle-word-wrap", "右端で折り返す")
-        .check("toggle-status-bar", "ステータスバー")
+        .item(&reading_mode)
+        .item(&word_wrap)
+        .item(&status_bar)
         .build()?;
 
     MenuBuilder::new(app)
@@ -451,7 +501,8 @@ pub fn run() {
             discard_recovery_snapshot,
             read_text_file,
             write_text_file,
-            open_external_url
+            open_external_url,
+            sync_view_menu
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MarkdownPad");

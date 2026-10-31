@@ -38,6 +38,7 @@ import { GFM } from "@lezer/markdown";
 import { tags } from "@lezer/highlight";
 import { livePreview } from "./livePreview";
 import { markdownPadKeymap } from "./markdownKeymap";
+import { externalDocumentSync, readingMode as readingModeExtension } from "./readingMode";
 
 interface MarkdownEditorProps {
   value: string;
@@ -51,6 +52,7 @@ interface MarkdownEditorProps {
   };
   wordWrap: boolean;
   zoom: number;
+  readingMode: boolean;
   onChange: (value: string) => void;
   onCursorChange: (cursor: { anchor: number; head: number }) => void;
   onScrollChange: (scroll: { x: number; y: number }) => void;
@@ -95,6 +97,11 @@ function openMarkdownPadSearchPanel(
   view: EditorView,
   mode: SearchPanelMode,
 ) {
+  // Reading mode cannot replace text, so Ctrl+H only opens the search row.
+  if (view.state.readOnly) {
+    mode = "search";
+  }
+
   applySearchPanelMode(view, mode);
   openSearchPanel(view);
   applySearchPanelMode(view, mode);
@@ -742,6 +749,18 @@ function editorTheme(zoom: number, wordWrap: boolean) {
     ".cm-md-search-panel[data-mode='search'] .cm-md-replace-row": {
       display: "none",
     },
+    // Reading mode: the content element is focusable only for keyboard
+    // scrolling and copying, so it draws no focus ring, and the search panel
+    // offers no replace row.
+    "&.cm-md-reading-mode .cm-content": {
+      outline: "none",
+    },
+    "&.cm-md-reading-mode .cm-md-search-mode-toggle": {
+      visibility: "hidden",
+    },
+    "&.cm-md-reading-mode .cm-md-replace-row": {
+      display: "none",
+    },
     "@media (max-width: 760px)": {
       ".cm-content": {
         paddingLeft: "16px",
@@ -768,6 +787,7 @@ function MarkdownEditor({
   scroll,
   wordWrap,
   zoom,
+  readingMode,
   onChange,
   onCursorChange,
   onScrollChange,
@@ -781,6 +801,7 @@ function MarkdownEditor({
   const syncingScrollRef = useRef(false);
   const wrapCompartment = useMemo(() => new Compartment(), []);
   const themeCompartment = useMemo(() => new Compartment(), []);
+  const readingCompartment = useMemo(() => new Compartment(), []);
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -922,6 +943,7 @@ function MarkdownEditor({
         livePreview,
         wrapCompartment.of(wordWrap ? EditorView.lineWrapping : []),
         themeCompartment.of(editorTheme(zoom, wordWrap)),
+        readingCompartment.of(readingModeExtension(readingMode)),
         updateListener,
       ],
     });
@@ -944,7 +966,7 @@ function MarkdownEditor({
       view.destroy();
       viewRef.current = null;
     };
-  }, [themeCompartment, wrapCompartment]);
+  }, [readingCompartment, themeCompartment, wrapCompartment]);
 
   useEffect(() => {
     const view = viewRef.current;
@@ -963,6 +985,8 @@ function MarkdownEditor({
           to: currentValue.length,
           insert: value,
         },
+        // Loading another tab's text is not an edit; reading mode allows it.
+        annotations: externalDocumentSync.of(true),
       });
       syncingValueRef.current = false;
     }
@@ -1022,6 +1046,31 @@ function MarkdownEditor({
       effects: themeCompartment.reconfigure(editorTheme(zoom, wordWrap)),
     });
   }, [themeCompartment, wordWrap, zoom]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+
+    if (!view || view.state.readOnly === readingMode) {
+      return;
+    }
+
+    // Switching contenteditable drops the focus, so hand it back to the editor
+    // when it had it (or when nothing else did, as after a menu click).
+    const activeElement = document.activeElement;
+    const restoreFocus =
+      view.hasFocus ||
+      view.contentDOM.contains(activeElement) ||
+      !activeElement ||
+      activeElement === document.body;
+
+    view.dispatch({
+      effects: readingCompartment.reconfigure(readingModeExtension(readingMode)),
+    });
+
+    if (restoreFocus) {
+      view.focus();
+    }
+  }, [readingCompartment, readingMode]);
 
   return <div ref={hostRef} className="editor-host" />;
 });

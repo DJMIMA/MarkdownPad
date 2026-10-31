@@ -19,6 +19,8 @@ import {
   openApplicationWindow,
   closeCurrentWindow,
   listenToCloseRequested,
+  listenToWindowFocus,
+  syncNativeViewMenu,
 } from "./platform";
 import { commandEdit, menuGroups, shortcutCommandFromEvent } from "./menu";
 import { MenuBar } from "./components/MenuBar";
@@ -99,6 +101,9 @@ function App() {
   const [settings, setSettings] = useState<EditorSettings>(
     defaultEditorSettings,
   );
+  // Reading mode is a view state of this window, like the open menu: it is not
+  // part of EditorSettings, so the recovery snapshot keeps its shape.
+  const [readingMode, setReadingMode] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [unsavedDialog, setUnsavedDialog] =
@@ -109,7 +114,10 @@ function App() {
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const nextUntitledIndex = tabs.filter((tab) => tab.isUntitled).length + 1;
-  const groups = useMemo(() => menuGroups(settings), [settings]);
+  const groups = useMemo(
+    () => menuGroups(settings, { readingMode }),
+    [readingMode, settings],
+  );
   const showFallbackMenu = !isTauriRuntime();
 
   const status = useMemo(() => {
@@ -134,6 +142,8 @@ function App() {
 
     setTabs((currentTabs) => [...currentTabs, tab]);
     setActiveTabId(tab.id);
+    // A new empty tab is meant for writing; there is nothing to read in it.
+    setReadingMode(false);
   }, [nextUntitledIndex]);
 
   const requestUnsavedDecision = useCallback((tabsToClose: DocumentTab[]) => {
@@ -338,8 +348,15 @@ function App() {
           }
           break;
         case "cut":
-        case "copy":
         case "paste":
+          if (readingMode) {
+            break;
+          }
+
+          editorRef.current?.focus();
+          requestAnimationFrame(() => commandEdit(action));
+          break;
+        case "copy":
           editorRef.current?.focus();
           requestAnimationFrame(() => commandEdit(action));
           break;
@@ -370,6 +387,9 @@ function App() {
             zoom: 100,
           }));
           break;
+        case "toggle-reading-mode":
+          setReadingMode((current) => !current);
+          break;
         case "toggle-word-wrap":
           setSettings((current) => ({
             ...current,
@@ -392,6 +412,7 @@ function App() {
       closeTab,
       dirtyTabsCanClose,
       openFile,
+      readingMode,
       saveActiveTab,
       tabs,
     ],
@@ -487,6 +508,44 @@ function App() {
 
     listenToMenuActions((action) => {
       void handleActionRef.current?.(action);
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup?.();
+        return;
+      }
+
+      unlisten = cleanup;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
+  const viewMenuStateRef = useRef({
+    readingMode,
+    wordWrap: settings.wordWrap,
+    showStatusBar: settings.showStatusBar,
+  });
+
+  useEffect(() => {
+    viewMenuStateRef.current = {
+      readingMode,
+      wordWrap: settings.wordWrap,
+      showStatusBar: settings.showStatusBar,
+    };
+    void syncNativeViewMenu(viewMenuStateRef.current);
+  }, [readingMode, settings.showStatusBar, settings.wordWrap]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    // The native menu is shared by every window; show this window's state
+    // whenever it becomes the focused one.
+    listenToWindowFocus(() => {
+      void syncNativeViewMenu(viewMenuStateRef.current);
     }).then((cleanup) => {
       if (disposed) {
         cleanup?.();
@@ -625,6 +684,7 @@ function App() {
           scroll={activeTab.scroll}
           wordWrap={settings.wordWrap}
           zoom={settings.zoom}
+          readingMode={readingMode}
           onChange={(content) =>
             updateActiveTab({
               content,
@@ -645,6 +705,7 @@ function App() {
           characters={status.characters}
           words={status.words}
           wordWrap={settings.wordWrap}
+          readingMode={readingMode}
         />
       ) : null}
 
