@@ -342,9 +342,6 @@ const monoFont = '"Cascadia Mono", "Consolas", "BIZ UDGothic", monospace';
 
 function editorTheme(zoom: number, wordWrap: boolean) {
   const fontSize = Math.max(12, Math.round(16 * (zoom / 100)));
-  // Readable line length: like Obsidian, the note is a centered column of
-  // about 700px at the default size, scaled with zoom.
-  const readableWidth = `${44 * fontSize}px`;
 
   return EditorView.theme({
     "&": {
@@ -358,12 +355,11 @@ function editorTheme(zoom: number, wordWrap: boolean) {
       lineHeight: "1.6",
     },
     ".cm-content": {
-      // CodeMirror sizes .cm-content as border-box, so add the side padding.
-      maxWidth: wordWrap ? `calc(${readableWidth} + 64px)` : "none",
+      // The text uses the full window width; with word wrap on it wraps at
+      // the window edge (minus the side padding).
       width: wordWrap ? "auto" : "max-content",
       minWidth: wordWrap ? "0" : "100%",
       minHeight: "100%",
-      margin: "0 auto",
       padding: "28px 32px 30vh",
       // The editor uses the native caret (no drawSelection), whose color the
       // CodeMirror base theme pins to black for non-dark themes. Follow the
@@ -659,8 +655,6 @@ function editorTheme(zoom: number, wordWrap: boolean) {
     ".cm-md-search-panel": {
       display: "grid",
       gap: "4px",
-      maxWidth: `calc(${readableWidth} + 64px)`,
-      margin: "0 auto",
       padding: "6px 32px",
     },
     ".cm-md-search-row": {
