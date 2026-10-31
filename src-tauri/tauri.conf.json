@@ -20,7 +20,27 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' asset: http://asset.localhost https: http: data: blob:",
+        "font-src": "'self' data:",
+        "connect-src": "'self' ipc: http://ipc.localhost",
+        "object-src": "'none'",
+        "frame-src": "'none'",
+        "base-uri": "'self'",
+        "form-action": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self' 'unsafe-inline' 'unsafe-eval' blob: data:",
+        "img-src": "'self' asset: http://asset.localhost https: http: data: blob:",
+        "connect-src": "'self' ipc: http://ipc.localhost ws://127.0.0.1:1420 http://127.0.0.1:1420",
+        "object-src": "'none'"
+      },
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ],
       "assetProtocol": {
         "enable": true,
         "scope": []
@@ -29,6 +49,18 @@
   },
   "bundle": {
     "active": false,
-    "targets": "all"
+    "targets": "all",
+    "fileAssociations": [
+      {
+        "ext": [
+          "md",
+          "markdown"
+        ],
+        "name": "Markdown",
+        "description": "Markdown document",
+        "role": "Editor",
+        "mimeType": "text/markdown"
+      }
+    ]
   }
 }

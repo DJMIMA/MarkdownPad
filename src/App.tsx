@@ -13,6 +13,7 @@ import {
 import {
   cancelQuit,
   closeCurrentWindow,
+  discardStalePrintDocuments,
   discardRecoverySnapshot,
   discardRecoverySnapshots,
   errorMessage,
@@ -40,7 +41,7 @@ import {
   syncNativeViewMenu,
   takePendingOpenFiles,
 } from "./platform";
-import { commandEdit, menuGroups, shortcutCommandFromEvent } from "./menu";
+import { isReloadShortcut, menuGroups, shortcutCommandFromEvent } from "./menu";
 import { MenuBar } from "./components/MenuBar";
 import { TabStrip } from "./components/TabStrip";
 import { StatusBar } from "./components/StatusBar";
@@ -681,17 +682,17 @@ function App() {
           }
           break;
         case "cut":
-        case "paste":
-          if (readingMode) {
-            break;
+          if (!readingMode) {
+            await editorRef.current?.cut();
           }
-
-          editorRef.current?.focus();
-          requestAnimationFrame(() => commandEdit(action));
+          break;
+        case "paste":
+          if (!readingMode) {
+            await editorRef.current?.paste();
+          }
           break;
         case "copy":
-          editorRef.current?.focus();
-          requestAnimationFrame(() => commandEdit(action));
+          await editorRef.current?.copy();
           break;
         case "find":
           editorRef.current?.openSearch();
@@ -1055,6 +1056,13 @@ function App() {
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
+      // Reloading would throw away this window's state (inside Tauri there is
+      // no address bar to come back from).
+      if (isTauriRuntime() && isReloadShortcut(event)) {
+        event.preventDefault();
+        return;
+      }
+
       // A key the editor already handled must not run a second action.
       if (
         event.defaultPrevented ||
@@ -1114,6 +1122,10 @@ function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [choiceDialog, settleChoice]);
+
+  useEffect(() => {
+    discardStalePrintDocuments();
+  }, []);
 
   useEffect(() => {
     function onOpenUrl(event: Event) {

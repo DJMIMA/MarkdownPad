@@ -52,3 +52,11 @@ test("image sources go through the resolver", () => {
   assert.match(html, /<img src="http:\/\/asset\.localhost\/images\/cat\.png" alt="猫">/);
   assert.doesNotMatch(html, /<img src="javascript/);
 });
+
+test("without a DOM to sanitize in, raw HTML is escaped instead of passed through", () => {
+  // Node has no DOM, so DOMPurify cannot run here: the output must still be safe.
+  const html = markdownToSafeHtml('<img src=x onerror="alert(1)">\n\n<script>alert(2)</script>');
+
+  assert.doesNotMatch(html, /<img|<script/);
+  assert.match(html, /&lt;script&gt;/);
+});

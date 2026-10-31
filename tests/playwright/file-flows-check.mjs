@@ -270,6 +270,16 @@ try {
     await page.keyboard.insertText("未保存");
     await page.evaluate(() => window.__tauriMock.emit("quit-requested", null));
     await dialogText(page);
+
+    // The keyboard stays on the dialog's buttons.
+    for (let index = 0; index < 5; index += 1) {
+      await page.keyboard.press("Tab");
+    }
+    assert.equal(
+      await page.evaluate(() => Boolean(document.activeElement?.closest("[role=dialog]"))),
+      true,
+    );
+
     await page.click("[role=dialog] button:has-text('キャンセル')");
     await page.waitForTimeout(100);
     assert.equal((await tauriCalls(page, "cancel_quit")).length, 1);

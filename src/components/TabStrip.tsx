@@ -18,42 +18,53 @@ export function TabStrip({
   return (
     <div className="tab-strip" role="tablist" aria-label="Open tabs">
       {tabs.map((tab) => (
-        <button
+        // A tab is not a <button>, so the close button inside it is not an
+        // interactive element nested in another one.
+        <div
           key={tab.id}
           className={`tab-button ${tab.id === activeTabId ? "active" : ""}`}
-          type="button"
           role="tab"
+          tabIndex={tab.id === activeTabId ? 0 : -1}
           aria-selected={tab.id === activeTabId}
           onClick={() => onSelect(tab.id)}
+          onMouseDown={(event) => {
+            // Middle click closes the tab, as in browsers.
+            if (event.button === 1) {
+              event.preventDefault();
+              onClose(tab.id);
+            }
+          }}
+          onKeyDown={(event) => {
+            if (event.target !== event.currentTarget) {
+              return;
+            }
+
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              onSelect(tab.id);
+            }
+          }}
         >
           <span className="tab-title" title={tab.path ?? tab.title}>
             {tab.title}
           </span>
-          <span
+          <button
+            type="button"
             className={tab.dirty ? "close-tab is-dirty" : "close-tab"}
-            role="button"
             aria-label={
               tab.dirty
                 ? `${tab.title}（未保存）を閉じる`
                 : `${tab.title} を閉じる`
             }
             title={tab.dirty ? "未保存の変更があります" : undefined}
-            tabIndex={0}
             onClick={(event) => {
               event.stopPropagation();
               onClose(tab.id);
             }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") {
-                event.preventDefault();
-                event.stopPropagation();
-                onClose(tab.id);
-              }
-            }}
           >
             ×
-          </span>
-        </button>
+          </button>
+        </div>
       ))}
 
       <button

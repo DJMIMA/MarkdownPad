@@ -43,7 +43,14 @@ import {
 } from "@codemirror/view";
 import { GFM } from "@lezer/markdown";
 import { tags } from "@lezer/highlight";
-import { imageSourceResolver, livePreview } from "./livePreview";
+import {
+  cutTableCellSelection,
+  imageSourceResolver,
+  livePreview,
+  prepareTableCellsForPaste,
+  selectedTableCellsText,
+  writeClipboardText,
+} from "./livePreview";
 import { resolveImageSource } from "../platform";
 import { markdownPadKeymap } from "./markdownKeymap";
 import { readingMode as readingModeExtension } from "./readingMode";
@@ -74,6 +81,10 @@ interface MarkdownEditorProps {
 
 export interface MarkdownEditorHandle {
   focus: () => void;
+  /** Edit menu commands; they use the Clipboard API, not execCommand. */
+  copy: () => Promise<void>;
+  cut: () => Promise<void>;
+  paste: () => Promise<void>;
   openSearch: () => void;
   openReplace: () => void;
   findNext: () => void;
@@ -362,6 +373,13 @@ const markdownHighlightStyle = HighlightStyle.define([
 const bodyFont =
   '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Hiragino Sans", "Meiryo", system-ui, sans-serif';
 const monoFont = '"Cascadia Mono", "Consolas", "BIZ UDGothic", monospace';
+
+function selectedText(view: EditorView) {
+  return view.state.selection.ranges
+    .filter((range) => !range.empty)
+    .map((range) => view.state.sliceDoc(range.from, range.to))
+    .join(view.state.lineBreak);
+}
 
 function imageResolverFor(documentPath: string | null) {
   return imageSourceResolver.of((source) => resolveImageSource(source, documentPath));
@@ -868,6 +886,72 @@ function MarkdownEditor({
   useImperativeHandle(ref, () => ({
     focus() {
       viewRef.current?.focus();
+    },
+    async copy() {
+      const view = viewRef.current;
+
+      if (!view) {
+        return;
+      }
+
+      const text = selectedTableCellsText(view) ?? selectedText(view);
+
+      if (text && !(await writeClipboardText(text))) {
+        throw new Error("クリップボードに書き込めませんでした。");
+      }
+
+      view.focus();
+    },
+    async cut() {
+      const view = viewRef.current;
+
+      if (!view || view.state.readOnly) {
+        return;
+      }
+
+      if (await cutTableCellSelection(view)) {
+        return;
+      }
+
+      const text = selectedText(view);
+
+      if (!text) {
+        return;
+      }
+
+      if (!(await writeClipboardText(text))) {
+        throw new Error("クリップボードに書き込めませんでした。");
+      }
+
+      view.dispatch(view.state.replaceSelection(""), {
+        userEvent: "delete.cut",
+        scrollIntoView: true,
+      });
+      view.focus();
+    },
+    async paste() {
+      const view = viewRef.current;
+
+      if (!view || view.state.readOnly) {
+        return;
+      }
+
+      let text: string;
+
+      try {
+        text = await navigator.clipboard.readText();
+      } catch {
+        throw new Error(
+          "クリップボードを読み取れませんでした。Ctrl+V で貼り付けてください。",
+        );
+      }
+
+      prepareTableCellsForPaste(view);
+      view.dispatch(view.state.replaceSelection(text), {
+        userEvent: "input.paste",
+        scrollIntoView: true,
+      });
+      view.focus();
     },
     openSearch() {
       const view = viewRef.current;

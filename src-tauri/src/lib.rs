@@ -22,7 +22,9 @@ use text_file::{EncodeError, FileStamp, LineEnding, TextEncoding};
 /// Event that tells an editor window to pull the files queued for it with
 /// `take_pending_open_files`.
 const OPEN_FILES_REQUESTED_EVENT: &str = "open-files-requested";
-const PRINT_WINDOW_LABEL_PREFIX: &str = "markdownpad-print-";
+/// Print windows get their own, minimal capability (capabilities/print.json),
+/// so their labels must not match the editor windows' `markdownpad-*`.
+const PRINT_WINDOW_LABEL_PREFIX: &str = "print-";
 const MAIN_WINDOW_LABEL: &str = "main";
 /// Event that asks an editor window to close as part of quitting the app.
 const QUIT_REQUESTED_EVENT: &str = "quit-requested";
@@ -1083,7 +1085,7 @@ mod tests {
     fn print_windows_are_not_open_file_targets() {
         assert!(is_editor_window_label("main"));
         assert!(is_editor_window_label("markdownpad-0f0e"));
-        assert!(!is_editor_window_label("markdownpad-print-0f0e"));
+        assert!(!is_editor_window_label("print-0f0e"));
     }
 
     #[test]

@@ -197,20 +197,22 @@ const printStyles = `
   }
 `;
 
-function sanitizeWithDomPurify(html: string) {
+// Used when DOMPurify cannot run (no DOM, e.g. in Node): raw HTML in the
+// Markdown is escaped instead of passed through, so output is always safe.
+const htmlFreeRenderer = new MarkdownIt({
+  html: false,
+  linkify: false,
+  typographer: false,
+});
+htmlFreeRenderer.core.ruler = renderer.core.ruler;
+htmlFreeRenderer.renderer.rules.image = (...args) => renderer.renderer.rules.image!(...args);
+
+function canSanitize() {
   const purifier = DOMPurify as typeof DOMPurify & {
     sanitize?: typeof DOMPurify.sanitize;
   };
 
-  if (typeof purifier.sanitize !== "function") {
-    return html;
-  }
-
-  return purifier.sanitize(html, {
-    USE_PROFILES: {
-      html: true,
-    },
-  });
+  return typeof purifier.sanitize === "function" && purifier.isSupported !== false;
 }
 
 function escapeHtml(text: string) {
@@ -225,7 +227,15 @@ export function markdownToSafeHtml(
   markdown: string,
   resolveImage?: (source: string) => string | null,
 ) {
-  return sanitizeWithDomPurify(renderer.render(markdown, { resolveImage }));
+  if (!canSanitize()) {
+    return htmlFreeRenderer.render(markdown, { resolveImage });
+  }
+
+  return DOMPurify.sanitize(renderer.render(markdown, { resolveImage }), {
+    USE_PROFILES: {
+      html: true,
+    },
+  });
 }
 
 export function markdownPrintDocument(

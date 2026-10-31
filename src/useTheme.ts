@@ -4,6 +4,7 @@ import {
   readStoredThemeMode,
   resolveTheme,
   storeThemeMode,
+  themeStorageKey,
   watchSystemTheme,
   type ResolvedTheme,
   type ThemeMode,
@@ -39,6 +40,18 @@ export function useTheme(): ThemeController {
       applyResolvedTheme(systemTheme);
     });
   }, [mode]);
+
+  // Another window switched the theme: follow it.
+  useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      if (event.key === null || event.key === themeStorageKey) {
+        setMode(readStoredThemeMode());
+      }
+    }
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   const toggleTheme = useCallback(() => {
     setMode((current) => (resolveTheme(current) === "dark" ? "light" : "dark"));

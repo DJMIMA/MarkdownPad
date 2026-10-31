@@ -208,6 +208,33 @@ try {
     await page.close();
   }
 
+  // Edit menu: copy, cut and paste work through the Clipboard API.
+  {
+    const page = await openBlankPage(browser, errors);
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"], {
+      origin: new URL(baseUrl).origin,
+    });
+    const menu = async (item) => {
+      await page.click(".menu-root-button:has-text('編集')");
+      await page.click(`.menu-item:has-text('${item}')`);
+      await page.waitForTimeout(150);
+    };
+    await page.click(".cm-content");
+    await page.keyboard.insertText("コピー元 / ");
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Shift+End");
+    await menu("コピー");
+    await page.keyboard.press("End");
+    await menu("貼り付け");
+    assert.equal(await editorDoc(page), "コピー元 / コピー元 / ");
+    await page.keyboard.press("Control+a");
+    await menu("切り取り");
+    assert.equal(await editorDoc(page), "");
+    await menu("貼り付け");
+    assert.equal(await editorDoc(page), "コピー元 / コピー元 / ");
+    await page.close();
+  }
+
   // Long documents: the end renders once the background parser gets there,
   // without having to move the caret first.
   {

@@ -606,7 +606,7 @@ function clampMenuPosition(value: number, size: number, max: number) {
   return Math.max(6, Math.min(value, Math.max(6, max - size - 6)));
 }
 
-async function writeClipboardText(text: string) {
+export async function writeClipboardText(text: string) {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text);
@@ -642,7 +642,20 @@ async function copyTableCellSelection(view: EditorView) {
   return writeClipboardText(tableCellSelectionText(selection));
 }
 
-async function cutTableCellSelection(view: EditorView) {
+/** Text of the selected table cells (tab and line separated), if any. */
+export function selectedTableCellsText(view: EditorView) {
+  const selection = tableCellSelections.get(view);
+  return selection ? tableCellSelectionText(selection) : null;
+}
+
+/** Lets pasted text replace the first selected cell, if cells are selected. */
+export function prepareTableCellsForPaste(view: EditorView) {
+  if (tableCellSelections.has(view)) {
+    beginEditingSelectedCell(view, true);
+  }
+}
+
+export async function cutTableCellSelection(view: EditorView) {
   // Hold on to the selection: the clipboard fallback briefly moves the focus
   // away, which clears the live selection before the copy finishes.
   const selection = tableCellSelections.get(view);
@@ -1391,6 +1404,7 @@ const sourceLineNavigation = ViewPlugin.fromClass(
 
       if (
         event.defaultPrevented ||
+        event.isComposing ||
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||

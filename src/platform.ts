@@ -454,8 +454,45 @@ export function discardStoredPrintDocument(id: string) {
 
 function storePrintDocument(document: MarkdownPrintDocument) {
   const id = crypto.randomUUID();
-  localStorage.setItem(printStorageKey(id), JSON.stringify(document));
+
+  try {
+    localStorage.setItem(
+      printStorageKey(id),
+      JSON.stringify({ ...document, createdAt: Date.now() }),
+    );
+  } catch {
+    throw new Error("文書が大きすぎるため印刷できませんでした。");
+  }
+
   return id;
+}
+
+/**
+ * Removes print data that a print window never picked up (for example when
+ * it was closed before printing). Print windows read theirs right away.
+ */
+export function discardStalePrintDocuments(maxAgeMs = 10 * 60 * 1000) {
+  const now = Date.now();
+
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const key = localStorage.key(index);
+
+    if (!key?.startsWith(printStorageKeyPrefix)) {
+      continue;
+    }
+
+    let createdAt = 0;
+
+    try {
+      createdAt = Number(JSON.parse(localStorage.getItem(key) ?? "{}").createdAt) || 0;
+    } catch {
+      // Unreadable entries are removed.
+    }
+
+    if (now - createdAt > maxAgeMs) {
+      localStorage.removeItem(key);
+    }
+  }
 }
 
 function openBrowserPrintWindow(route: string) {
@@ -471,7 +508,7 @@ function openBrowserPrintWindow(route: string) {
 
 function openTauriPrintWindow(route: string, title: string, printDocumentId: string) {
   const printWindow = new WebviewWindow(
-    `markdownpad-print-${crypto.randomUUID()}`,
+    `print-${crypto.randomUUID()}`,
     {
       url: route,
       title: `印刷 - ${title}`,
