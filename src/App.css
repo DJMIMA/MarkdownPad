@@ -710,6 +710,9 @@ body.print-route .print-missing h1 {
   color: var(--mp-text-secondary);
   font-size: 14px;
   line-height: 1.6;
+  /* Messages may contain line breaks and long file paths. */
+  white-space: pre-line;
+  overflow-wrap: anywhere;
 }
 
 .unsaved-dialog-actions {

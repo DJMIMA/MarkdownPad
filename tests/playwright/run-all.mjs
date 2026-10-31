@@ -14,6 +14,7 @@ const checks = [
   "drag-drift-check.mjs",
   "reading-mode-check.mjs",
   "editor-safety-check.mjs",
+  "file-flows-check.mjs",
 ];
 
 async function isUp() {

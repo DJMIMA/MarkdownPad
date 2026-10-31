@@ -1,5 +1,8 @@
+mod recovery;
+mod text_file;
+
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     ffi::OsString,
     fs,
@@ -11,29 +14,101 @@ use tauri::{
     menu::{
         CheckMenuItem, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder,
     },
-    AppHandle, Emitter, Manager, Runtime, WebviewWindow, WindowEvent,
+    AppHandle, Emitter, Manager, Runtime, State, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_opener::OpenerExt;
+use text_file::{EncodeError, FileStamp, LineEnding, TextEncoding};
 
 /// Event that tells an editor window to pull the files queued for it with
 /// `take_pending_open_files`.
 const OPEN_FILES_REQUESTED_EVENT: &str = "open-files-requested";
 const PRINT_WINDOW_LABEL_PREFIX: &str = "markdownpad-print-";
+const MAIN_WINDOW_LABEL: &str = "main";
+
+/// Extensions accepted from the command line (file association, "Open with",
+/// a second launch). The open dialog additionally offers "All files".
+const OPENABLE_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd", "mkdn", "txt"];
 
 #[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct OpenedMarkdownFile {
     title: String,
     path: String,
     content: String,
+    encoding: TextEncoding,
+    line_ending: LineEnding,
+    stamp: Option<FileStamp>,
+}
+
+/// A file handed to a window from the command line: its contents, or why it
+/// could not be read (so the window can tell the user).
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingOpenFile {
+    path: String,
+    file: Option<OpenedMarkdownFile>,
+    error: Option<String>,
 }
 
 #[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SavedMarkdownFile {
-    title: String,
-    path: String,
-    dirty: bool,
-    is_untitled: bool,
+#[serde(tag = "status", rename_all = "camelCase")]
+enum SaveOutcome {
+    Saved {
+        stamp: Option<FileStamp>,
+    },
+    /// The file changed on disk since it was opened or last saved.
+    Conflict,
+    /// The text has characters the file's encoding cannot represent.
+    Unencodable,
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+enum SaveAsOutcome {
+    Saved {
+        title: String,
+        path: String,
+        stamp: Option<FileStamp>,
+    },
+    Canceled,
+    Unencodable,
+}
+
+/// Files the frontend may read or write: only paths the user picked in a
+/// dialog, passed on the command line, or that were open in a recovered
+/// session. The webview can never name an arbitrary path to overwrite.
+#[derive(Default)]
+struct FileAccess {
+    allowed: Mutex<HashSet<String>>,
+}
+
+impl FileAccess {
+    fn allow(&self, path: &str) {
+        if let Ok(mut allowed) = self.allowed.lock() {
+            allowed.insert(path.to_string());
+        }
+    }
+
+    fn check(&self, path: &str) -> Result<(), String> {
+        let allowed = self
+            .allowed
+            .lock()
+            .map(|allowed| allowed.contains(path))
+            .unwrap_or(false);
+
+        if allowed {
+            Ok(())
+        } else {
+            Err("このファイルへのアクセスは許可されていません。".to_string())
+        }
+    }
+}
+
+/// Snapshot ids that were on disk when this process started, i.e. left by a
+/// session that did not end normally.
+#[derive(Default)]
+struct RecoveryState {
+    previous_session: Mutex<Vec<String>>,
 }
 
 fn file_title_from_path(path: &Path) -> String {
@@ -43,49 +118,96 @@ fn file_title_from_path(path: &Path) -> String {
         .to_string()
 }
 
-fn is_markdown_file_path(path: &Path) -> bool {
+fn is_openable_file_path(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "md" | "markdown"))
+        .map(|extension| {
+            let extension = extension.to_ascii_lowercase();
+            OPENABLE_EXTENSIONS.contains(&extension.as_str())
+        })
         .unwrap_or(false)
 }
 
-fn launch_markdown_path_from_args(args: impl IntoIterator<Item = OsString>) -> Option<PathBuf> {
-    args.into_iter().skip(1).find_map(|arg| {
-        let text = arg.to_string_lossy();
-
-        if text == "--" || text.starts_with('-') {
-            return None;
-        }
-
-        let path = PathBuf::from(arg);
-        is_markdown_file_path(&path).then_some(path)
-    })
+fn launch_file_paths_from_args(args: impl IntoIterator<Item = OsString>) -> Vec<PathBuf> {
+    args.into_iter()
+        .skip(1)
+        .filter(|arg| !arg.to_string_lossy().starts_with('-'))
+        .map(PathBuf::from)
+        .filter(|path| is_openable_file_path(path))
+        .collect()
 }
 
-/// Resolves the Markdown path a second instance was launched with. Its
-/// arguments may be relative to the second instance's working directory,
-/// not to this process's.
-fn forwarded_markdown_path(args: Vec<String>, cwd: &str) -> Option<PathBuf> {
-    let path = launch_markdown_path_from_args(args.into_iter().map(OsString::from))?;
-
-    if path.is_absolute() || cwd.is_empty() {
-        Some(path)
-    } else {
-        Some(Path::new(cwd).join(path))
-    }
+/// Resolves the files a second instance was launched with. Its arguments may
+/// be relative to the second instance's working directory, not to this
+/// process's.
+fn forwarded_file_paths(args: Vec<String>, cwd: &str) -> Vec<PathBuf> {
+    launch_file_paths_from_args(args.into_iter().map(OsString::from))
+        .into_iter()
+        .map(|path| {
+            if path.is_absolute() || cwd.is_empty() {
+                path
+            } else {
+                Path::new(cwd).join(path)
+            }
+        })
+        .collect()
 }
 
 fn read_markdown_file(path: &Path) -> Result<OpenedMarkdownFile, String> {
-    let content =
-        fs::read_to_string(path).map_err(|error| format!("failed to read file: {error}"))?;
-    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let bytes = fs::read(path).map_err(|error| {
+        format!(
+            "{} を読み込めませんでした。\n{error}",
+            file_title_from_path(path)
+        )
+    })?;
+    let decoded = text_file::decode_text(&bytes).map_err(|error| {
+        format!(
+            "{} を開けませんでした。\n{error}",
+            file_title_from_path(path)
+        )
+    })?;
+    let canonical_path = text_file::canonical_path(path);
 
     Ok(OpenedMarkdownFile {
         title: file_title_from_path(path),
+        stamp: text_file::file_stamp(&canonical_path).ok(),
         path: canonical_path.to_string_lossy().to_string(),
-        content,
+        content: decoded.content,
+        encoding: decoded.encoding,
+        line_ending: decoded.line_ending,
     })
+}
+
+/// Reads a file the user chose and allows the frontend to save back to it.
+fn open_user_file<R: Runtime>(
+    app: &AppHandle<R>,
+    path: &Path,
+) -> Result<OpenedMarkdownFile, String> {
+    let file = read_markdown_file(path)?;
+    app.state::<FileAccess>().allow(&file.path);
+    Ok(file)
+}
+
+fn pending_open_file<R: Runtime>(app: &AppHandle<R>, path: &Path) -> PendingOpenFile {
+    let path_text = path.to_string_lossy().to_string();
+    let result = if path.is_file() {
+        open_user_file(app, path)
+    } else {
+        Err(format!("ファイルが見つかりません。\n{path_text}"))
+    };
+
+    match result {
+        Ok(file) => PendingOpenFile {
+            path: path_text,
+            file: Some(file),
+            error: None,
+        },
+        Err(error) => PendingOpenFile {
+            path: path_text,
+            file: None,
+            error: Some(error),
+        },
+    }
 }
 
 fn is_editor_window_label(label: &str) -> bool {
@@ -97,7 +219,7 @@ fn is_editor_window_label(label: &str) -> bool {
 #[derive(Default)]
 struct OpenFileRouting {
     last_focused_editor: Mutex<Option<String>>,
-    pending_by_window: Mutex<HashMap<String, Vec<OpenedMarkdownFile>>>,
+    pending_by_window: Mutex<HashMap<String, Vec<PendingOpenFile>>>,
 }
 
 fn target_editor_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
@@ -110,7 +232,7 @@ fn target_editor_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<
 
     last_focused
         .and_then(|label| app.get_webview_window(&label))
-        .or_else(|| app.get_webview_window("main"))
+        .or_else(|| app.get_webview_window(MAIN_WINDOW_LABEL))
         .or_else(|| {
             app.webview_windows()
                 .into_values()
@@ -118,38 +240,32 @@ fn target_editor_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<
         })
 }
 
-fn open_forwarded_markdown_file<R: Runtime>(app: &AppHandle<R>, args: Vec<String>, cwd: String) {
+fn open_forwarded_files<R: Runtime>(app: &AppHandle<R>, args: Vec<String>, cwd: String) {
     let Some(window) = target_editor_window(app) else {
         return;
     };
+    let paths = forwarded_file_paths(args, &cwd);
 
-    match forwarded_markdown_path(args, &cwd) {
-        Some(path) => {
-            if let Some(file) = path
-                .is_file()
-                .then(|| read_markdown_file(&path).ok())
-                .flatten()
-            {
-                let routing = app.state::<OpenFileRouting>();
-
-                if let Ok(mut pending) = routing.pending_by_window.lock() {
-                    pending
-                        .entry(window.label().to_string())
-                        .or_default()
-                        .push(file);
-                }
-
-                let _ = app.emit_to(window.label(), OPEN_FILES_REQUESTED_EVENT, ());
-            }
-        }
-        // Launching the app again without a file (Start menu, middle-click on
-        // the taskbar button) still gives the user another window.
-        None => {
-            let _ = app.emit_to(window.label(), "menu-action", "new-window");
-            return;
-        }
+    // Launching the app again without a file (Start menu, middle-click on the
+    // taskbar button) still gives the user another window.
+    if paths.is_empty() {
+        let _ = app.emit_to(window.label(), "menu-action", "new-window");
+        return;
     }
 
+    let files: Vec<PendingOpenFile> = paths
+        .iter()
+        .map(|path| pending_open_file(app, path))
+        .collect();
+
+    if let Ok(mut pending) = app.state::<OpenFileRouting>().pending_by_window.lock() {
+        pending
+            .entry(window.label().to_string())
+            .or_default()
+            .extend(files);
+    }
+
+    let _ = app.emit_to(window.label(), OPEN_FILES_REQUESTED_EVENT, ());
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
@@ -158,14 +274,22 @@ fn open_forwarded_markdown_file<R: Runtime>(app: &AppHandle<R>, args: Vec<String
 #[tauri::command]
 fn take_pending_open_files<R: Runtime>(
     window: WebviewWindow<R>,
-    routing: tauri::State<'_, OpenFileRouting>,
-) -> Vec<OpenedMarkdownFile> {
+    routing: State<'_, OpenFileRouting>,
+) -> Vec<PendingOpenFile> {
     routing
         .pending_by_window
         .lock()
         .ok()
         .and_then(|mut pending| pending.remove(window.label()))
         .unwrap_or_default()
+}
+
+#[tauri::command]
+fn load_launch_markdown_files<R: Runtime>(app: AppHandle<R>) -> Vec<PendingOpenFile> {
+    launch_file_paths_from_args(env::args_os())
+        .iter()
+        .map(|path| pending_open_file(&app, path))
+        .collect()
 }
 
 #[cfg(target_os = "windows")]
@@ -192,25 +316,14 @@ fn selected_path_from_buffer(buffer: &[u16]) -> Option<PathBuf> {
 }
 
 #[cfg(target_os = "windows")]
-fn common_dialog_error_message(action: &str) -> String {
-    let error = unsafe { windows_sys::Win32::UI::Controls::Dialogs::CommDlgExtendedError() };
-
-    if error == 0 {
-        format!("{action} canceled")
-    } else {
-        format!("{action} failed with common dialog error {error}")
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn choose_markdown_file_path(
-    action: &str,
+fn choose_markdown_file_path<R: Runtime>(
+    window: &WebviewWindow<R>,
     suggested_name: Option<&str>,
     save: bool,
 ) -> Result<Option<PathBuf>, String> {
     use windows_sys::Win32::UI::Controls::Dialogs::{
-        GetOpenFileNameW, GetSaveFileNameW, OFN_ENABLESIZING, OFN_EXPLORER, OFN_FILEMUSTEXIST,
-        OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
+        CommDlgExtendedError, GetOpenFileNameW, GetSaveFileNameW, OFN_ENABLESIZING, OFN_EXPLORER,
+        OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST, OPENFILENAMEW,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
 
@@ -237,9 +350,16 @@ fn choose_markdown_file_path(
         flags |= OFN_FILEMUSTEXIST;
     }
 
+    // Owned by the window the command came from, so the dialog is modal to
+    // it even if another program has the focus.
+    let owner = window
+        .hwnd()
+        .map(|hwnd| hwnd.0 as _)
+        .unwrap_or_else(|_| unsafe { GetForegroundWindow() });
+
     let mut dialog = OPENFILENAMEW {
         lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
-        hwndOwner: unsafe { GetForegroundWindow() },
+        hwndOwner: owner,
         lpstrFilter: filter.as_ptr(),
         nFilterIndex: 1,
         lpstrFile: file_buffer.as_mut_ptr(),
@@ -259,145 +379,270 @@ fn choose_markdown_file_path(
     };
 
     if accepted == 0 {
-        let error = unsafe { windows_sys::Win32::UI::Controls::Dialogs::CommDlgExtendedError() };
+        let error = unsafe { CommDlgExtendedError() };
 
         if error == 0 {
             return Ok(None);
         }
 
-        return Err(common_dialog_error_message(action));
+        return Err(format!(
+            "ファイルダイアログを開けませんでした（エラー {error}）。"
+        ));
     }
 
     Ok(selected_path_from_buffer(&file_buffer))
 }
 
-fn recovery_snapshot_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
-    let app_data_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("failed to resolve app data directory: {error}"))?;
-
-    Ok(app_data_dir.join("recovery.snapshot.json"))
-}
-
-#[tauri::command]
-fn load_recovery_snapshot<R: Runtime>(
-    app: AppHandle<R>,
-) -> Result<Option<serde_json::Value>, String> {
-    let snapshot_path = recovery_snapshot_path(&app)?;
-
-    if !snapshot_path.exists() {
-        return Ok(None);
-    }
-
-    let content = fs::read_to_string(snapshot_path)
-        .map_err(|error| format!("failed to read recovery snapshot: {error}"))?;
-    let snapshot = serde_json::from_str(&content)
-        .map_err(|error| format!("failed to parse recovery snapshot: {error}"))?;
-
-    Ok(Some(snapshot))
-}
-
-#[tauri::command]
-fn load_launch_markdown_file() -> Result<Option<OpenedMarkdownFile>, String> {
-    let Some(path) = launch_markdown_path_from_args(env::args_os()) else {
-        return Ok(None);
-    };
-
-    if !path.is_file() {
-        return Ok(None);
-    }
-
-    read_markdown_file(&path)
-        .map(Some)
-        .map_err(|error| format!("failed to read launch file: {error}"))
-}
-
-#[cfg(target_os = "windows")]
-#[tauri::command]
-fn open_markdown_file_dialog() -> Result<Option<OpenedMarkdownFile>, String> {
-    let Some(path) = choose_markdown_file_path("open Markdown file", None, false)? else {
-        return Ok(None);
-    };
-
-    read_markdown_file(&path).map(Some)
-}
-
 #[cfg(not(target_os = "windows"))]
-#[tauri::command]
-fn open_markdown_file_dialog() -> Result<Option<OpenedMarkdownFile>, String> {
-    Err("native file dialogs are only implemented on Windows".to_string())
+fn choose_markdown_file_path<R: Runtime>(
+    _window: &WebviewWindow<R>,
+    _suggested_name: Option<&str>,
+    _save: bool,
+) -> Result<Option<PathBuf>, String> {
+    Err("ファイルダイアログは Windows でのみ利用できます。".to_string())
 }
 
-#[cfg(target_os = "windows")]
+// The native file dialogs run on the main thread (synchronous commands do),
+// which already has the COM apartment the dialogs need.
 #[tauri::command]
-fn save_markdown_file_as_dialog(
+fn open_markdown_file_dialog<R: Runtime>(
+    app: AppHandle<R>,
+    window: WebviewWindow<R>,
+) -> Result<Option<OpenedMarkdownFile>, String> {
+    let Some(path) = choose_markdown_file_path(&window, None, false)? else {
+        return Ok(None);
+    };
+
+    open_user_file(&app, &path).map(Some)
+}
+
+fn encode_for_save(
+    content: &str,
+    encoding: TextEncoding,
+    line_ending: LineEnding,
+) -> Result<Option<Vec<u8>>, String> {
+    match text_file::encode_text(content, encoding, line_ending) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(EncodeError::Unencodable) => Ok(None),
+    }
+}
+
+fn write_user_file(path: &Path, bytes: &[u8]) -> Result<Option<FileStamp>, String> {
+    text_file::write_atomically(path, bytes).map_err(|error| {
+        format!(
+            "{} を保存できませんでした。\n{error}",
+            file_title_from_path(path)
+        )
+    })?;
+
+    Ok(text_file::file_stamp(path).ok())
+}
+
+#[tauri::command]
+fn save_markdown_file_as_dialog<R: Runtime>(
+    window: WebviewWindow<R>,
+    access: State<'_, FileAccess>,
     suggested_name: String,
     content: String,
-) -> Result<Option<SavedMarkdownFile>, String> {
-    let Some(path) =
-        choose_markdown_file_path("save Markdown file", Some(suggested_name.as_str()), true)?
+    encoding: TextEncoding,
+    line_ending: LineEnding,
+) -> Result<SaveAsOutcome, String> {
+    // Check before asking for a file name, so the user is not asked twice.
+    let Some(bytes) = encode_for_save(&content, encoding, line_ending)? else {
+        return Ok(SaveAsOutcome::Unencodable);
+    };
+    let Some(path) = choose_markdown_file_path(&window, Some(suggested_name.as_str()), true)?
     else {
-        return Ok(None);
+        return Ok(SaveAsOutcome::Canceled);
     };
 
-    fs::write(&path, content).map_err(|error| format!("failed to write file: {error}"))?;
-    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+    write_user_file(&path, &bytes)?;
+    let canonical_path = text_file::canonical_path(&path);
+    let path_text = canonical_path.to_string_lossy().to_string();
+    access.allow(&path_text);
 
-    Ok(Some(SavedMarkdownFile {
+    Ok(SaveAsOutcome::Saved {
         title: file_title_from_path(&path),
-        path: canonical_path.to_string_lossy().to_string(),
-        dirty: false,
-        is_untitled: false,
-    }))
+        stamp: text_file::file_stamp(&canonical_path).ok(),
+        path: path_text,
+    })
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Saves over a file the user opened or saved before. Unless `overwrite` is
+/// set, a file that changed on disk since `expected_stamp` is left alone and
+/// reported as a conflict.
 #[tauri::command]
-fn save_markdown_file_as_dialog(
-    _suggested_name: String,
-    _content: String,
-) -> Result<Option<SavedMarkdownFile>, String> {
-    Err("native file dialogs are only implemented on Windows".to_string())
+async fn save_markdown_file(
+    access: State<'_, FileAccess>,
+    path: String,
+    content: String,
+    encoding: TextEncoding,
+    line_ending: LineEnding,
+    expected_stamp: Option<FileStamp>,
+    overwrite: bool,
+) -> Result<SaveOutcome, String> {
+    access.check(&path)?;
+
+    let Some(bytes) = encode_for_save(&content, encoding, line_ending)? else {
+        return Ok(SaveOutcome::Unencodable);
+    };
+    let target = PathBuf::from(&path);
+
+    if !overwrite {
+        if let (Some(expected), Ok(current)) = (expected_stamp, text_file::file_stamp(&target)) {
+            if current != expected {
+                return Ok(SaveOutcome::Conflict);
+            }
+        }
+    }
+
+    let stamp = write_user_file(&target, &bytes)?;
+    Ok(SaveOutcome::Saved { stamp })
 }
 
 #[tauri::command]
-fn save_recovery_snapshot<R: Runtime>(
+async fn reload_markdown_file(
+    access: State<'_, FileAccess>,
+    path: String,
+) -> Result<OpenedMarkdownFile, String> {
+    access.check(&path)?;
+    read_markdown_file(Path::new(&path))
+}
+
+fn app_data_dir<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve app data directory: {error}"))
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryCandidate {
+    id: String,
+    /// False for this window's own snapshot, found after its page reloaded.
+    from_previous_session: bool,
+    /// None when the file could not be read; the id is still returned so the
+    /// file is removed together with the others.
+    snapshot: Option<serde_json::Value>,
+}
+
+/// Snapshots this window should offer to restore: for the main window, the
+/// ones left by a session that did not end normally; for any window, its own
+/// snapshot if its page was reloaded.
+#[tauri::command]
+async fn load_recovery_snapshots<R: Runtime>(
     app: AppHandle<R>,
+    window: WebviewWindow<R>,
+    recovery: State<'_, RecoveryState>,
+    access: State<'_, FileAccess>,
+) -> Result<Vec<RecoveryCandidate>, String> {
+    let app_data = app_data_dir(&app)?;
+    let mut ids: Vec<(String, bool)> = Vec::new();
+
+    if window.label() == MAIN_WINDOW_LABEL {
+        if let Ok(previous) = recovery.previous_session.lock() {
+            ids.extend(previous.iter().map(|id| (id.clone(), true)));
+        }
+    }
+
+    let own_id = recovery::snapshot_id_for_window(window.label());
+
+    if !ids.iter().any(|(id, _)| id == &own_id) {
+        ids.push((own_id, false));
+    }
+
+    Ok(ids
+        .into_iter()
+        .filter_map(|(id, from_previous_session)| {
+            let path = recovery::snapshot_path(&app_data, &id)?;
+
+            if !path.is_file() {
+                return None;
+            }
+
+            let snapshot = fs::read_to_string(&path)
+                .ok()
+                .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok());
+
+            if let Some(snapshot) = &snapshot {
+                for tab_path in recovery::tab_paths(snapshot) {
+                    access.allow(&tab_path);
+                }
+            }
+
+            Some(RecoveryCandidate {
+                id,
+                from_previous_session,
+                snapshot,
+            })
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn discard_recovery_snapshots<R: Runtime>(
+    app: AppHandle<R>,
+    recovery: State<'_, RecoveryState>,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    let app_data = app_data_dir(&app)?;
+
+    for id in &ids {
+        if let Some(path) = recovery::snapshot_path(&app_data, id) {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("failed to discard recovery snapshot: {error}")),
+            }
+        }
+    }
+
+    if let Ok(mut previous) = recovery.previous_session.lock() {
+        previous.retain(|id| !ids.contains(id));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn save_recovery_snapshot<R: Runtime>(
+    app: AppHandle<R>,
+    window: WebviewWindow<R>,
     snapshot: serde_json::Value,
 ) -> Result<(), String> {
-    let snapshot_path = recovery_snapshot_path(&app)?;
-    let snapshot_dir = snapshot_path
-        .parent()
-        .ok_or_else(|| "failed to resolve recovery snapshot directory".to_string())?;
-    fs::create_dir_all(snapshot_dir)
+    let app_data = app_data_dir(&app)?;
+    let directory = recovery::snapshot_directory(&app_data);
+    let path =
+        recovery::snapshot_path(&app_data, &recovery::snapshot_id_for_window(window.label()))
+            .ok_or_else(|| "invalid recovery snapshot name".to_string())?;
+    fs::create_dir_all(&directory)
         .map_err(|error| format!("failed to create recovery directory: {error}"))?;
-    let content = serde_json::to_string_pretty(&snapshot)
+    let content = serde_json::to_vec(&snapshot)
         .map_err(|error| format!("failed to serialize recovery snapshot: {error}"))?;
 
-    fs::write(snapshot_path, content)
+    text_file::write_atomically(&path, &content)
         .map_err(|error| format!("failed to write recovery snapshot: {error}"))
 }
 
+/// Removes this window's own snapshot when it closes normally. Other windows'
+/// snapshots are never touched.
 #[tauri::command]
-fn discard_recovery_snapshot<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    let snapshot_path = recovery_snapshot_path(&app)?;
+async fn discard_recovery_snapshot<R: Runtime>(
+    app: AppHandle<R>,
+    window: WebviewWindow<R>,
+) -> Result<(), String> {
+    let app_data = app_data_dir(&app)?;
+    let Some(path) =
+        recovery::snapshot_path(&app_data, &recovery::snapshot_id_for_window(window.label()))
+    else {
+        return Ok(());
+    };
 
-    match fs::remove_file(snapshot_path) {
+    match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("failed to discard recovery snapshot: {error}")),
     }
-}
-
-#[tauri::command]
-fn read_text_file(path: String) -> Result<String, String> {
-    fs::read_to_string(path).map_err(|error| format!("failed to read file: {error}"))
-}
-
-#[tauri::command]
-fn write_text_file(path: String, content: String) -> Result<(), String> {
-    fs::write(path, content).map_err(|error| format!("failed to write file: {error}"))
 }
 
 fn normalized_external_url(url: &str) -> Option<String> {
@@ -580,11 +825,23 @@ pub fn run() {
     tauri::Builder::default()
         // Must be the first plugin: a second launch hands its arguments to
         // this instance and exits before creating any window.
-        .plugin(tauri_plugin_single_instance::init(
-            open_forwarded_markdown_file,
-        ))
+        .plugin(tauri_plugin_single_instance::init(open_forwarded_files))
         .plugin(tauri_plugin_opener::init())
         .manage(OpenFileRouting::default())
+        .manage(FileAccess::default())
+        .setup(|app| {
+            // Snapshots still on disk now were left by a session that did not
+            // end normally.
+            let previous_session = app
+                .path()
+                .app_data_dir()
+                .map(|app_data| recovery::existing_snapshot_ids(&app_data))
+                .unwrap_or_default();
+            app.manage(RecoveryState {
+                previous_session: Mutex::new(previous_session),
+            });
+            Ok(())
+        })
         .menu(markdownpad_menu)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref().to_string();
@@ -593,7 +850,9 @@ pub fn run() {
                 .into_values()
                 .find(|window| window.is_focused().unwrap_or(false));
 
-            if let Some(window) = focused_window.or_else(|| app.get_webview_window("main")) {
+            if let Some(window) =
+                focused_window.or_else(|| app.get_webview_window(MAIN_WINDOW_LABEL))
+            {
                 // `emit` would broadcast to every window; deliver only to the
                 // window the menu was used in.
                 let _ = app.emit_to(window.label(), "menu-action", id);
@@ -629,14 +888,15 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            load_recovery_snapshot,
-            load_launch_markdown_file,
-            open_markdown_file_dialog,
-            save_markdown_file_as_dialog,
+            load_recovery_snapshots,
+            discard_recovery_snapshots,
             save_recovery_snapshot,
             discard_recovery_snapshot,
-            read_text_file,
-            write_text_file,
+            load_launch_markdown_files,
+            open_markdown_file_dialog,
+            save_markdown_file_as_dialog,
+            save_markdown_file,
+            reload_markdown_file,
             open_external_url,
             sync_view_menu,
             take_pending_open_files
@@ -654,71 +914,75 @@ mod tests {
     }
 
     #[test]
-    fn launch_markdown_path_from_args_uses_first_markdown_path() {
+    fn launch_file_paths_keep_every_openable_file_in_order() {
         assert_eq!(
-            launch_markdown_path_from_args(args(&[
+            launch_file_paths_from_args(args(&[
                 "markdownpad.exe",
                 "--some-tauri-flag",
-                "C:\\tmp\\note.txt",
+                "C:\\tmp\\image.png",
                 "C:\\tmp\\note.md",
                 "C:\\tmp\\second.markdown",
+                "C:\\tmp\\plain.txt",
             ])),
-            Some(PathBuf::from("C:\\tmp\\note.md"))
+            vec![
+                PathBuf::from("C:\\tmp\\note.md"),
+                PathBuf::from("C:\\tmp\\second.markdown"),
+                PathBuf::from("C:\\tmp\\plain.txt"),
+            ]
         );
     }
 
     #[test]
-    fn launch_markdown_path_from_args_accepts_markdown_extension_case_insensitively() {
+    fn launch_file_paths_accept_extensions_case_insensitively() {
         assert_eq!(
-            launch_markdown_path_from_args(args(&["markdownpad.exe", "C:\\tmp\\NOTE.MD"])),
-            Some(PathBuf::from("C:\\tmp\\NOTE.MD"))
+            launch_file_paths_from_args(args(&["markdownpad.exe", "C:\\tmp\\NOTE.MD"])),
+            vec![PathBuf::from("C:\\tmp\\NOTE.MD")]
         );
     }
 
     #[test]
-    fn launch_markdown_path_from_args_ignores_non_markdown_args() {
-        assert_eq!(
-            launch_markdown_path_from_args(args(&["markdownpad.exe", "--", "C:\\tmp\\note.txt",])),
-            None
-        );
+    fn launch_file_paths_ignore_flags_and_other_files() {
+        assert!(launch_file_paths_from_args(args(&[
+            "markdownpad.exe",
+            "--",
+            "C:\\tmp\\photo.jpg",
+        ]))
+        .is_empty());
     }
 
     #[test]
-    fn forwarded_markdown_path_resolves_relative_paths_against_second_instance_cwd() {
+    fn forwarded_file_paths_resolve_relative_paths_against_second_instance_cwd() {
         let cwd = env::temp_dir();
         let cwd_text = cwd.to_string_lossy().to_string();
 
         assert_eq!(
-            forwarded_markdown_path(
+            forwarded_file_paths(
                 vec!["markdownpad.exe".to_string(), "note.md".to_string()],
                 &cwd_text,
             ),
-            Some(cwd.join("note.md"))
+            vec![cwd.join("note.md")]
         );
     }
 
     #[test]
-    fn forwarded_markdown_path_keeps_absolute_paths() {
+    fn forwarded_file_paths_keep_absolute_paths() {
         let absolute = env::temp_dir().join("note.md");
 
         assert_eq!(
-            forwarded_markdown_path(
+            forwarded_file_paths(
                 vec![
                     "markdownpad.exe".to_string(),
                     absolute.to_string_lossy().to_string(),
                 ],
                 "/somewhere/else",
             ),
-            Some(absolute)
+            vec![absolute]
         );
     }
 
     #[test]
-    fn forwarded_markdown_path_ignores_launch_without_markdown_file() {
-        assert_eq!(
-            forwarded_markdown_path(vec!["markdownpad.exe".to_string()], "/tmp"),
-            None
-        );
+    fn forwarded_file_paths_are_empty_for_a_launch_without_files() {
+        assert!(forwarded_file_paths(vec!["markdownpad.exe".to_string()], "/tmp").is_empty());
     }
 
     #[test]
@@ -726,6 +990,35 @@ mod tests {
         assert!(is_editor_window_label("main"));
         assert!(is_editor_window_label("markdownpad-0f0e"));
         assert!(!is_editor_window_label("markdownpad-print-0f0e"));
+    }
+
+    #[test]
+    fn file_access_only_allows_registered_paths() {
+        let access = FileAccess::default();
+
+        assert!(access.check("C:\\notes\\a.md").is_err());
+        access.allow("C:\\notes\\a.md");
+        assert!(access.check("C:\\notes\\a.md").is_ok());
+        assert!(access.check("C:\\Windows\\win.ini").is_err());
+    }
+
+    #[test]
+    fn read_markdown_file_decodes_and_stamps_the_file() {
+        let directory =
+            env::temp_dir().join(format!("markdownpad-read-test-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("crlf.md");
+        fs::write(&path, b"\xEF\xBB\xBF# Title\r\nBody\r\n").unwrap();
+
+        let file = read_markdown_file(&path).unwrap();
+
+        assert_eq!(file.content, "# Title\nBody\n");
+        assert_eq!(file.encoding, TextEncoding::Utf8Bom);
+        assert_eq!(file.line_ending, LineEnding::Crlf);
+        assert_eq!(file.stamp.map(|stamp| stamp.size), Some(18));
+        assert!(!file.path.starts_with("\\\\?\\"));
+
+        fs::remove_dir_all(&directory).unwrap();
     }
 
     #[cfg(target_os = "windows")]
