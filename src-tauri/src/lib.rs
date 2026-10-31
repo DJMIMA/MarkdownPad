@@ -1,17 +1,24 @@
 use std::{
+    collections::HashMap,
     env,
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
-    AppHandle, Emitter, Manager, Runtime,
+    AppHandle, Emitter, Manager, Runtime, WebviewWindow, WindowEvent,
 };
 use tauri_plugin_opener::OpenerExt;
 
-#[derive(serde::Serialize)]
+/// Event that tells an editor window to pull the files queued for it with
+/// `take_pending_open_files`.
+const OPEN_FILES_REQUESTED_EVENT: &str = "open-files-requested";
+const PRINT_WINDOW_LABEL_PREFIX: &str = "markdownpad-print-";
+
+#[derive(Clone, serde::Serialize)]
 struct OpenedMarkdownFile {
     title: String,
     path: String,
@@ -52,6 +59,111 @@ fn launch_markdown_path_from_args(args: impl IntoIterator<Item = OsString>) -> O
         let path = PathBuf::from(arg);
         is_markdown_file_path(&path).then_some(path)
     })
+}
+
+/// Resolves the Markdown path a second instance was launched with. Its
+/// arguments may be relative to the second instance's working directory,
+/// not to this process's.
+fn forwarded_markdown_path(args: Vec<String>, cwd: &str) -> Option<PathBuf> {
+    let path = launch_markdown_path_from_args(args.into_iter().map(OsString::from))?;
+
+    if path.is_absolute() || cwd.is_empty() {
+        Some(path)
+    } else {
+        Some(Path::new(cwd).join(path))
+    }
+}
+
+fn read_markdown_file(path: &Path) -> Result<OpenedMarkdownFile, String> {
+    let content =
+        fs::read_to_string(path).map_err(|error| format!("failed to read file: {error}"))?;
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+    Ok(OpenedMarkdownFile {
+        title: file_title_from_path(path),
+        path: canonical_path.to_string_lossy().to_string(),
+        content,
+    })
+}
+
+fn is_editor_window_label(label: &str) -> bool {
+    !label.starts_with(PRINT_WINDOW_LABEL_PREFIX)
+}
+
+/// Routes files that a second launch (for example a double-click in
+/// Explorer) hands over to the running instance.
+#[derive(Default)]
+struct OpenFileRouting {
+    last_focused_editor: Mutex<Option<String>>,
+    pending_by_window: Mutex<HashMap<String, Vec<OpenedMarkdownFile>>>,
+}
+
+fn target_editor_window<R: Runtime>(app: &AppHandle<R>) -> Option<WebviewWindow<R>> {
+    let last_focused = app
+        .state::<OpenFileRouting>()
+        .last_focused_editor
+        .lock()
+        .ok()
+        .and_then(|label| label.clone());
+
+    last_focused
+        .and_then(|label| app.get_webview_window(&label))
+        .or_else(|| app.get_webview_window("main"))
+        .or_else(|| {
+            app.webview_windows()
+                .into_values()
+                .find(|window| is_editor_window_label(window.label()))
+        })
+}
+
+fn open_forwarded_markdown_file<R: Runtime>(app: &AppHandle<R>, args: Vec<String>, cwd: String) {
+    let Some(window) = target_editor_window(app) else {
+        return;
+    };
+
+    match forwarded_markdown_path(args, &cwd) {
+        Some(path) => {
+            if let Some(file) = path
+                .is_file()
+                .then(|| read_markdown_file(&path).ok())
+                .flatten()
+            {
+                let routing = app.state::<OpenFileRouting>();
+
+                if let Ok(mut pending) = routing.pending_by_window.lock() {
+                    pending
+                        .entry(window.label().to_string())
+                        .or_default()
+                        .push(file);
+                }
+
+                let _ = app.emit_to(window.label(), OPEN_FILES_REQUESTED_EVENT, ());
+            }
+        }
+        // Launching the app again without a file (Start menu, middle-click on
+        // the taskbar button) still gives the user another window.
+        None => {
+            let _ = app.emit_to(window.label(), "menu-action", "new-window");
+            return;
+        }
+    }
+
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
+#[tauri::command]
+fn take_pending_open_files<R: Runtime>(
+    window: WebviewWindow<R>,
+    routing: tauri::State<'_, OpenFileRouting>,
+) -> Vec<OpenedMarkdownFile> {
+    routing
+        .pending_by_window
+        .lock()
+        .ok()
+        .and_then(|mut pending| pending.remove(window.label()))
+        .unwrap_or_default()
 }
 
 #[cfg(target_os = "windows")]
@@ -194,15 +306,9 @@ fn load_launch_markdown_file() -> Result<Option<OpenedMarkdownFile>, String> {
         return Ok(None);
     }
 
-    let content = fs::read_to_string(&path)
-        .map_err(|error| format!("failed to read launch file: {error}"))?;
-    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-
-    Ok(Some(OpenedMarkdownFile {
-        title: file_title_from_path(&path),
-        path: canonical_path.to_string_lossy().to_string(),
-        content,
-    }))
+    read_markdown_file(&path)
+        .map(Some)
+        .map_err(|error| format!("failed to read launch file: {error}"))
 }
 
 #[cfg(target_os = "windows")]
@@ -211,15 +317,8 @@ fn open_markdown_file_dialog() -> Result<Option<OpenedMarkdownFile>, String> {
     let Some(path) = choose_markdown_file_path("open Markdown file", None, false)? else {
         return Ok(None);
     };
-    let content =
-        fs::read_to_string(&path).map_err(|error| format!("failed to read file: {error}"))?;
-    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
 
-    Ok(Some(OpenedMarkdownFile {
-        title: file_title_from_path(&path),
-        path: canonical_path.to_string_lossy().to_string(),
-        content,
-    }))
+    read_markdown_file(&path).map(Some)
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -429,7 +528,13 @@ fn markdownpad_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be the first plugin: a second launch hands its arguments to
+        // this instance and exits before creating any window.
+        .plugin(tauri_plugin_single_instance::init(
+            open_forwarded_markdown_file,
+        ))
         .plugin(tauri_plugin_opener::init())
+        .manage(OpenFileRouting::default())
         .menu(markdownpad_menu)
         .on_menu_event(|app, event| {
             let id = event.id().as_ref().to_string();
@@ -439,7 +544,38 @@ pub fn run() {
                 .find(|window| window.is_focused().unwrap_or(false));
 
             if let Some(window) = focused_window.or_else(|| app.get_webview_window("main")) {
-                let _ = window.emit("menu-action", id);
+                // `emit` would broadcast to every window; deliver only to the
+                // window the menu was used in.
+                let _ = app.emit_to(window.label(), "menu-action", id);
+            }
+        })
+        .on_window_event(|window, event| {
+            let label = window.label();
+
+            if !is_editor_window_label(label) {
+                return;
+            }
+
+            let routing = window.state::<OpenFileRouting>();
+
+            match event {
+                WindowEvent::Focused(true) => {
+                    if let Ok(mut last_focused) = routing.last_focused_editor.lock() {
+                        *last_focused = Some(label.to_string());
+                    }
+                }
+                WindowEvent::Destroyed => {
+                    if let Ok(mut last_focused) = routing.last_focused_editor.lock() {
+                        if last_focused.as_deref() == Some(label) {
+                            *last_focused = None;
+                        }
+                    }
+
+                    if let Ok(mut pending) = routing.pending_by_window.lock() {
+                        pending.remove(label);
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -451,7 +587,8 @@ pub fn run() {
             discard_recovery_snapshot,
             read_text_file,
             write_text_file,
-            open_external_url
+            open_external_url,
+            take_pending_open_files
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MarkdownPad");
@@ -493,6 +630,51 @@ mod tests {
             launch_markdown_path_from_args(args(&["markdownpad.exe", "--", "C:\\tmp\\note.txt",])),
             None
         );
+    }
+
+    #[test]
+    fn forwarded_markdown_path_resolves_relative_paths_against_second_instance_cwd() {
+        let cwd = env::temp_dir();
+        let cwd_text = cwd.to_string_lossy().to_string();
+
+        assert_eq!(
+            forwarded_markdown_path(
+                vec!["markdownpad.exe".to_string(), "note.md".to_string()],
+                &cwd_text,
+            ),
+            Some(cwd.join("note.md"))
+        );
+    }
+
+    #[test]
+    fn forwarded_markdown_path_keeps_absolute_paths() {
+        let absolute = env::temp_dir().join("note.md");
+
+        assert_eq!(
+            forwarded_markdown_path(
+                vec![
+                    "markdownpad.exe".to_string(),
+                    absolute.to_string_lossy().to_string(),
+                ],
+                "/somewhere/else",
+            ),
+            Some(absolute)
+        );
+    }
+
+    #[test]
+    fn forwarded_markdown_path_ignores_launch_without_markdown_file() {
+        assert_eq!(
+            forwarded_markdown_path(vec!["markdownpad.exe".to_string()], "/tmp"),
+            None
+        );
+    }
+
+    #[test]
+    fn print_windows_are_not_open_file_targets() {
+        assert!(is_editor_window_label("main"));
+        assert!(is_editor_window_label("markdownpad-0f0e"));
+        assert!(!is_editor_window_label("markdownpad-print-0f0e"));
     }
 
     #[cfg(target_os = "windows")]
