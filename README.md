@@ -222,12 +222,33 @@ Tauri デスクトップアプリとして起動します。
 npm run tauri dev
 ```
 
+ブラウザ検査（`tests/playwright/` の 4 種類）をまとめて実行します。
+Vite dev server が起動していなければ自動で起動し、終了後に停止します。
+Google Chrome がインストールされている必要があります。
+
+```powershell
+npm run test:e2e
+```
+
 Rust/Tauri 側だけを確認します。
 
 ```powershell
 cd src-tauri
 cargo check
 ```
+
+Linux（クラウドのコンテナなど）で `cargo check` を実行するには、Tauri が
+使う GTK / WebKitGTK の開発パッケージが必要です。Ubuntu 24.04 では次の
+とおりです。
+
+```bash
+sudo apt-get install -y --no-install-recommends \
+  libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+  librsvg2-dev libxdo-dev libssl-dev pkg-config build-essential
+```
+
+`src-tauri/icons/` のアイコンは `icon.ico` を元に `npx tauri icon` で
+生成しています。Linux ビルドは `icon.png` を使います。
 
 ## CI
 

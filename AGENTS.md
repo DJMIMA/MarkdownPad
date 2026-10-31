@@ -37,7 +37,9 @@ MarkdownPad は、単体の Markdown ファイルを軽く開き、美しく読�
 
 Tauri 開発には Rust/Cargo が必要です。変更の確認には、unit test の
 `npm test`、型検査とフロントエンドビルドの `npm run build`、Rust 側の
-`cargo check`（`src-tauri` で実行）を使う。
+`cargo check`（`src-tauri` で実行）を使う。表示やエディタ操作に関わる変更は、
+`npm run test:e2e`（Vite dev server を必要に応じて起動し、Playwright の
+ブラウザ検査 4 種類を実行）でも確認する。
 
 ## MVP スコープ
 
