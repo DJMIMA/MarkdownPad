@@ -263,9 +263,10 @@ Tauri デスクトップアプリとして起動します。
 npm run tauri dev
 ```
 
-ブラウザ検査（`tests/playwright/` の 5 種類）をまとめて実行します。
+ブラウザ検査（`tests/playwright/` の `*-check.mjs`）をまとめて実行します。
 Vite dev server が起動していなければ自動で起動し、終了後に停止します。
-Google Chrome がインストールされている必要があります。
+既定では Google Chrome を使います。Chrome がない環境では、環境変数
+`MARKDOWNPAD_CHROMIUM` に Chromium の実行ファイルのパスを指定します。
 
 ```powershell
 npm run test:e2e
