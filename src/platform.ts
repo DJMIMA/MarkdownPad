@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import {
+  WebviewWindow,
+  getCurrentWebviewWindow,
+} from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { MarkdownPrintDocument } from "./markdown";
 import type { DocumentTab, RecoverySnapshot } from "./types";
@@ -480,7 +483,38 @@ export async function listenToMenuActions(
     return null;
   }
 
-  return listen<MenuAction>("menu-action", (event) => {
+  // Listen on this window only: the Rust side sends menu actions to the
+  // window the menu was used in.
+  return getCurrentWebviewWindow().listen<MenuAction>("menu-action", (event) => {
     onAction(event.payload);
+  });
+}
+
+/**
+ * Files the running instance received from a second launch, such as a
+ * double-click on a Markdown file in Explorer. The Rust side queues them per
+ * window, so nothing is lost while this window is still starting up.
+ */
+export async function takePendingOpenFiles(): Promise<OpenedMarkdownFile[]> {
+  if (!isTauriRuntime()) {
+    return [];
+  }
+
+  try {
+    return await invoke<OpenedMarkdownFile[]>("take_pending_open_files");
+  } catch {
+    return [];
+  }
+}
+
+export async function listenToOpenFilesRequested(
+  onRequested: () => void,
+): Promise<UnlistenFn | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  return getCurrentWebviewWindow().listen("open-files-requested", () => {
+    onRequested();
   });
 }

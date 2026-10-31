@@ -455,6 +455,25 @@ const draggedVisualLineClicks = new WeakMap<EditorView, number>();
 const tableCellSelections = new WeakMap<EditorView, TableCellSelection>();
 const tableCellSelectionMenus = new WeakMap<EditorView, HTMLElement>();
 
+// True when the press lands on the target's own scrollbar (e.g. the horizontal
+// scrollbar of a wide table), which must scroll instead of revealing source.
+function isScrollbarPointerEvent(event: MouseEvent) {
+  const target = event.target;
+
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  const rect = target.getBoundingClientRect();
+  const contentRight = rect.left + target.clientLeft + target.clientWidth;
+  const contentBottom = rect.top + target.clientTop + target.clientHeight;
+
+  return (
+    (target.scrollWidth > target.clientWidth && event.clientY >= contentBottom) ||
+    (target.scrollHeight > target.clientHeight && event.clientX >= contentRight)
+  );
+}
+
 function suppressNextVisualLineClick(view: EditorView) {
   const token = Date.now();
 
@@ -1477,6 +1496,11 @@ class CodeBlockWidget extends WidgetType {
     }
 
     event.stopPropagation();
+
+    if (isScrollbarPointerEvent(event)) {
+      return;
+    }
+
     clearTableCellSelection(view);
 
     const startX = event.clientX;
@@ -1741,6 +1765,11 @@ class TableWidget extends WidgetType {
     wrapper: HTMLElement,
   ) {
     if (event.button !== 0) {
+      return;
+    }
+
+    if (isScrollbarPointerEvent(event)) {
+      event.stopPropagation();
       return;
     }
 

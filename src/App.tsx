@@ -21,6 +21,8 @@ import {
   listenToCloseRequested,
   listenToWindowFocus,
   syncNativeViewMenu,
+  listenToOpenFilesRequested,
+  takePendingOpenFiles,
 } from "./platform";
 import { commandEdit, menuGroups, shortcutCommandFromEvent } from "./menu";
 import { MenuBar } from "./components/MenuBar";
@@ -92,12 +94,14 @@ function App() {
   );
   const unsavedDialogRef = useRef<UnsavedDialogState | null>(null);
   const recoveryDialogRef = useRef<RecoveryDialogState | null>(null);
+  const recoveryReadyRef = useRef(false);
   const skipRecovery = useMemo(
     () => new URLSearchParams(window.location.search).has("blank"),
     [],
   );
   const [tabs, setTabs] = useState<DocumentTab[]>(() => [createUntitledTab(1)]);
   const [activeTabId, setActiveTabId] = useState(() => tabs[0].id);
+  const tabsRef = useRef(tabs);
   const [settings, setSettings] = useState<EditorSettings>(
     defaultEditorSettings,
   );
@@ -286,6 +290,36 @@ function App() {
     [activeTabId, dirtyTabsCanClose, tabs],
   );
 
+  const openFilesInTabs = useCallback((files: OpenedMarkdownFile[]) => {
+    if (files.length === 0) {
+      return;
+    }
+
+    // A file that is already open keeps its tab (and any unsaved edits); it
+    // is only brought to the front.
+    const findOpenTab = (currentTabs: DocumentTab[], path: string | null) =>
+      path ? currentTabs.find((tab) => tab.path === path) : undefined;
+    const openedTabs = files
+      .map(createTabFromOpenedFile)
+      .filter(
+        (tab, index, all) => !findOpenTab(all.slice(0, index), tab.path),
+      );
+    const lastPath = files[files.length - 1].path;
+    const lastTab =
+      findOpenTab(tabsRef.current, lastPath) ??
+      findOpenTab(openedTabs, lastPath) ??
+      openedTabs[openedTabs.length - 1];
+
+    setTabs((currentTabs) =>
+      openedTabs.reduce(
+        (nextTabs, tab) =>
+          findOpenTab(nextTabs, tab.path) ? nextTabs : [...nextTabs, tab],
+        currentTabs,
+      ),
+    );
+    setActiveTabId(lastTab.id);
+  }, []);
+
   const openFile = useCallback(async () => {
     const file = await openMarkdownFile();
 
@@ -293,11 +327,19 @@ function App() {
       return;
     }
 
-    const tab = createTabFromOpenedFile(file);
+    openFilesInTabs([file]);
+  }, [openFilesInTabs]);
 
-    setTabs((currentTabs) => [...currentTabs, tab]);
-    setActiveTabId(tab.id);
-  }, []);
+  // Files handed over by a second launch wait in the Rust-side queue until
+  // this window has settled its startup tabs and any recovery choice, so the
+  // startup state cannot overwrite them.
+  const openPendingFiles = useCallback(async () => {
+    if (!recoveryReadyRef.current) {
+      return;
+    }
+
+    openFilesInTabs(await takePendingOpenFiles());
+  }, [openFilesInTabs]);
 
   const saveActiveTab = useCallback(
     async (saveAs = false) => {
@@ -429,6 +471,39 @@ function App() {
   useEffect(() => {
     recoveryDialogRef.current = recoveryDialog;
   }, [recoveryDialog]);
+
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+
+  useEffect(() => {
+    recoveryReadyRef.current = recoveryReady;
+
+    if (recoveryReady) {
+      void openPendingFiles();
+    }
+  }, [openPendingFiles, recoveryReady]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+
+    listenToOpenFilesRequested(() => {
+      void openPendingFiles();
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup?.();
+        return;
+      }
+
+      unlisten = cleanup;
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [openPendingFiles]);
 
   useEffect(() => {
     if (skipRecovery) {

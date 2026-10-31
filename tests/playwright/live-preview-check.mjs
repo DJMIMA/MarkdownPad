@@ -170,6 +170,8 @@ async function run() {
   const browser = await chromium.launch({
     channel: "chrome",
     headless: true,
+    // Keep real scrollbars so clicks on a wide table's scrollbar can be tested.
+    ignoreDefaultArgs: ["--hide-scrollbars"],
   });
 
   try {
@@ -1110,6 +1112,51 @@ async function run() {
     assert.equal(afterSearchHighlight.tableWidgets, 1);
     assert.equal(afterSearchHighlight.codeWidgets, 1);
     assert.deepEqual(searchHighlightErrors, []);
+
+    const tableScrollbarPage = await browser.newPage({
+      viewport: {
+        width: 520,
+        height: 600,
+      },
+    });
+    await tableScrollbarPage.goto(blankUrl, {
+      waitUntil: "networkidle",
+    });
+    await replaceEditorText(
+      tableScrollbarPage,
+      [
+        "Intro line",
+        "",
+        "| Variable | Required | Description |",
+        "| --- | --- | --- |",
+        `| \`OAUTH_ISSUER\`, \`OAUTH_JWKS_URL\`, \`MCP_RESOURCE_URL\` | HTTP mode | ${"OAuth settings that make this table wider than the window. ".repeat(3)}|`,
+        "",
+        "Outro line",
+      ].join("\n"),
+    );
+    await tableScrollbarPage.waitForSelector(".cm-md-table-wrapper table");
+    const scrollbarTarget = await tableScrollbarPage.evaluate(() => {
+      const wrapper = document.querySelector(".cm-md-table-wrapper");
+      const rect = wrapper.getBoundingClientRect();
+      const scrollbarHeight = wrapper.offsetHeight - wrapper.clientHeight;
+
+      return {
+        overflowing: wrapper.scrollWidth > wrapper.clientWidth,
+        scrollbarHeight,
+        x: rect.left + rect.width * 0.75,
+        y: rect.bottom - scrollbarHeight / 2,
+      };
+    });
+    assert.ok(scrollbarTarget.overflowing, JSON.stringify(scrollbarTarget));
+    assert.ok(scrollbarTarget.scrollbarHeight > 0, JSON.stringify(scrollbarTarget));
+    await tableScrollbarPage.mouse.click(scrollbarTarget.x, scrollbarTarget.y);
+    await tableScrollbarPage.waitForTimeout(150);
+    const afterScrollbarClick = await tableScrollbarPage.evaluate(() => ({
+      tableCount: document.querySelectorAll(".cm-md-table-wrapper").length,
+      scrollLeft: document.querySelector(".cm-md-table-wrapper")?.scrollLeft ?? 0,
+    }));
+    assert.equal(afterScrollbarClick.tableCount, 1, JSON.stringify(afterScrollbarClick));
+    assert.ok(afterScrollbarClick.scrollLeft > 0, JSON.stringify(afterScrollbarClick));
 
     const mobilePage = await browser.newPage({
       viewport: {
