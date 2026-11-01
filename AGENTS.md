@@ -474,6 +474,12 @@ Markdown ファイルは信頼できない入力として扱います。WebView 
   `.github/workflows/release.yml` が作る。
 - アイコンは `src-tauri/icons/app-icon.png` を元に `npx tauri icon` で
   生成する。手で描き直したり、別の元画像を足したりしない。
+- MarkdownPad 自体は MIT ライセンス。配布 zip には `LICENSE.txt` と、
+  組み込んだ npm パッケージ・Rust クレートのライセンスをまとめた
+  `THIRD-PARTY-NOTICES.txt`（`scripts/third-party-notices.mjs` が生成）を
+  入れる。依存関係を足すときは、そのライセンスが
+  `src-tauri/about.toml` の `accepted` に入っているかを確かめる。GPL など
+  配布条件を変えるライセンスの依存関係は、明示承認なしに足さない。
 
 ## ドキュメント運用
 

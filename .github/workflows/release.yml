@@ -2,7 +2,8 @@ name: Release
 
 # Pushing a tag such as v0.1.0 builds the Windows exe and publishes it as a
 # GitHub Release. There is no installer: the release carries a zip with the
-# exe alone, and the notes come from that version's CHANGELOG.md section.
+# exe, LICENSE.txt and THIRD-PARTY-NOTICES.txt, and the notes come from that
+# version's CHANGELOG.md section.
 on:
   push:
     tags: ["v*.*.*"]
@@ -50,12 +51,23 @@ jobs:
       - name: Build
         run: npm run tauri -- build
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      # The licenses of the bundled npm packages and Rust crates, which
+      # their licenses require to ship with the exe.
+      - name: Third-party notices
+        run: |
+          mkdir -p release/MarkdownPad
+          node scripts/third-party-notices.mjs release/MarkdownPad/THIRD-PARTY-NOTICES.txt
+
       - name: Package
         shell: pwsh
         run: |
           $zip = "MarkdownPad-$env:VERSION-windows-x64.zip"
-          New-Item -ItemType Directory -Force release/MarkdownPad | Out-Null
           Copy-Item src-tauri/target/release/markdownpad.exe release/MarkdownPad/MarkdownPad.exe
+          Copy-Item LICENSE release/MarkdownPad/LICENSE.txt
           Compress-Archive -Path release/MarkdownPad -DestinationPath "release/$zip"
           $hash = (Get-FileHash "release/$zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $zip" | Set-Content -NoNewline -Encoding ascii "release/$zip.sha256"

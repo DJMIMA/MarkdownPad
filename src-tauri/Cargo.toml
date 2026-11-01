@@ -3,6 +3,7 @@ name = "markdownpad"
 version = "0.1.1"
 description = "A lightweight Markdown editor and reader"
 authors = ["MarkdownPad contributors"]
+license = "MIT"
 edition = "2021"
 
 [lib]

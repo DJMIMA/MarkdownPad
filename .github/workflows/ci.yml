@@ -143,3 +143,12 @@ jobs:
       - name: cargo test
         working-directory: src-tauri
         run: cargo test --locked
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      # Fails when a dependency has a license that src-tauri/about.toml does
+      # not accept, before a release has to ship its notice.
+      - name: Third-party notices
+        run: node scripts/third-party-notices.mjs "$RUNNER_TEMP/THIRD-PARTY-NOTICES.txt"

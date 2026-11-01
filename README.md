@@ -34,6 +34,9 @@ Markdown を整形して表示できません。MarkdownPad はその間を埋�
 2. 好きな場所に展開する（例: `C:\Tools\MarkdownPad`）。
 3. `MarkdownPad.exe` を起動する。
 
+zip には `MarkdownPad.exe` のほか、ライセンス文（`LICENSE.txt`、
+`THIRD-PARTY-NOTICES.txt`）が入っています。
+
 動作環境は、Windows 10 / 11（64 ビット）と Microsoft Edge WebView2
 Runtime です。WebView2 は Windows 11 には標準で入っています。入って
 いない場合は [Microsoft のページ](https://developer.microsoft.com/microsoft-edge/webview2/)
@@ -160,6 +163,15 @@ HTML タグは、エディタでは文字のまま表示し、印刷では安全
 ## 変更履歴
 
 バージョンごとの変更は [CHANGELOG.md](CHANGELOG.md) にあります。
+
+## ライセンス
+
+MarkdownPad は [MIT ライセンス](LICENSE) で公開しています。使用、改変、
+再配布、商用利用のいずれも自由で、条件は著作権表示とライセンス文を
+残すことだけです。
+
+アプリに組み込んでいるライブラリのライセンスは、配布する zip の
+`THIRD-PARTY-NOTICES.txt` にまとめています。
 
 ## 開発
 

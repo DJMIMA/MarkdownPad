@@ -1,6 +1,7 @@
 {
   "name": "markdownpad",
   "private": true,
+  "license": "MIT",
   "version": "0.1.1",
   "type": "module",
   "engines": {

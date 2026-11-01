@@ -82,6 +82,29 @@ npm run tauri -- build
 npx tauri icon src-tauri/icons/app-icon.png -o $env:TEMP\markdownpad-icons
 ```
 
+## ライセンス
+
+MarkdownPad 自体は MIT ライセンス（`LICENSE`）です。exe に組み込む
+npm パッケージと Rust クレートのライセンスは、配布時に
+`THIRD-PARTY-NOTICES.txt` として exe に添えます（MIT、Apache-2.0、
+BSD などはどれも、再配布時にライセンス文を含めることを求めています）。
+
+```powershell
+cargo install cargo-about --locked --features cli
+node scripts/third-party-notices.mjs THIRD-PARTY-NOTICES.txt
+```
+
+- npm パッケージは `package-lock.json` のうち開発用でないものを対象に、
+  各パッケージ同梱のライセンスファイルを使います。
+- Rust クレートは [cargo-about](https://github.com/EmbarkStudios/cargo-about)
+  で Windows 向けのビルドに入るものを集めます。受け入れるライセンスは
+  `src-tauri/about.toml` の `accepted` で、複数のライセンスから選べる
+  クレートはこの並びの先頭（MIT）を使います。
+- 依存関係を足して、`accepted` にないライセンスのものが入ると、生成が
+  失敗します（CI でも検出します）。そのライセンスで配布してよいかを
+  確かめてから `accepted` に加えます。GPL など、MarkdownPad の配布条件を
+  変えてしまうライセンスは加えません。
+
 ## CI
 
 `.github/workflows/ci.yml` が、`main` への push と pull request ごとに
@@ -91,7 +114,7 @@ npx tauri icon src-tauri/icons/app-icon.png -o $env:TEMP\markdownpad-icons
 - Browser checks（Ubuntu）: Playwright のブラウザ検査。スクリーン
   ショットは Actions の artifact に保存する
 - Tauri（Windows）: `cargo fmt --check`、`cargo clippy -- -D warnings`、
-  `cargo test`
+  `cargo test`、第三者ライセンス表記の生成（下記）
 
 依存関係は Dependabot（`.github/dependabot.yml`）が毎週月曜に確認します。
 minor / patch の更新はエコシステムごとに 1 つの PR にまとめ、major の
@@ -122,5 +145,6 @@ git push origin v0.1.1
 タグを push すると `.github/workflows/release.yml` が動きます。タグと
 バージョンが一致することを確かめてから exe をビルドし、
 `MarkdownPad-<バージョン>-windows-x64.zip` と SHA-256 のチェックサムを
-GitHub Releases に公開します。リリースノートには `CHANGELOG.md` の
+GitHub Releases に公開します。zip の中身は `MarkdownPad.exe`、
+`LICENSE.txt`、`THIRD-PARTY-NOTICES.txt` です。リリースノートには `CHANGELOG.md` の
 該当する節（`node scripts/changelog.mjs <バージョン>` の出力）を使います。
