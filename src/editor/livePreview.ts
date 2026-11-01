@@ -2445,32 +2445,39 @@ class HorizontalRuleWidget extends WidgetType {
 }
 
 /**
- * Turns an image source from the document into a URL the webview can load
- * (relative and local paths need the document's folder and the platform's
- * file URL scheme). Null hides the image. Provided by the editor per tab.
+ * Loads image references for the document being shown: `key` identifies
+ * the document (its path), `load` resolves a reference to a URL the webview
+ * can load, or null when the image cannot be shown. Provided per tab by the
+ * editor; the default shows references as they are.
  */
-export const imageSourceResolver = Facet.define<
-  (source: string) => string | null,
-  (source: string) => string | null
->({
-  combine: (values) => values[0] ?? ((source) => source),
+export interface ImageSourceResolver {
+  key: string;
+  load: (source: string) => Promise<string | null>;
+}
+
+export const imageSourceResolver = Facet.define<ImageSourceResolver, ImageSourceResolver>({
+  combine: (values) =>
+    values[0] ?? { key: "", load: (source) => Promise.resolve(source) },
 });
 
 class ImageWidget extends WidgetType {
   private readonly alt: string;
-  private readonly url: string;
+  private readonly source: string;
+  private readonly resolver: ImageSourceResolver;
 
-  constructor(alt: string, url: string) {
+  constructor(alt: string, source: string, resolver: ImageSourceResolver) {
     super();
     this.alt = alt;
-    this.url = url;
+    this.source = source;
+    this.resolver = resolver;
   }
 
   eq(widget: WidgetType) {
     return (
       widget instanceof ImageWidget &&
       widget.alt === this.alt &&
-      widget.url === this.url
+      widget.source === this.source &&
+      widget.resolver.key === this.resolver.key
     );
   }
 
@@ -2480,15 +2487,29 @@ class ImageWidget extends WidgetType {
 
     const image = document.createElement("img");
     image.alt = this.alt;
-    image.src = this.url;
     image.loading = "lazy";
     figure.append(image);
 
-    if (this.alt) {
-      const caption = document.createElement("figcaption");
-      caption.textContent = this.alt;
-      figure.append(caption);
-    }
+    const caption = document.createElement("figcaption");
+    caption.textContent = this.alt;
+    figure.append(caption);
+
+    // An image that cannot be shown leaves its alt text (or file name)
+    // instead of a broken-image icon.
+    const unavailable = () => {
+      figure.classList.add("cm-md-image-unavailable");
+      figure.title = `画像を表示できません: ${this.source}`;
+      caption.textContent = this.alt || this.source;
+    };
+
+    image.addEventListener("error", unavailable, { once: true });
+    void this.resolver.load(this.source).then((url) => {
+      if (url) {
+        image.src = url;
+      } else {
+        unavailable();
+      }
+    });
 
     return figure;
   }
@@ -2885,11 +2906,7 @@ function buildInlineDecorations(
       }
 
       if (node.name === "Image" && !isInSourceRange(node, sourceRanges.all)) {
-        const parts = imageParts(state, node.node);
-        const image = {
-          alt: parts.alt,
-          url: parts.url ? state.facet(imageSourceResolver)(parts.url) : null,
-        };
+        const image = imageParts(state, node.node);
 
         if (image.url) {
           addDecoration(
@@ -2897,7 +2914,11 @@ function buildInlineDecorations(
             node.from,
             node.to,
             Decoration.replace({
-              widget: new ImageWidget(image.alt, image.url),
+              widget: new ImageWidget(
+                image.alt,
+                image.url,
+                state.facet(imageSourceResolver),
+              ),
             }),
           );
           return false;

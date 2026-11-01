@@ -255,14 +255,52 @@ fn read_markdown_file(path: &Path) -> Result<OpenedMarkdownFile, String> {
     })
 }
 
-/// Lets the frontend read and write `path`, and lets the editor show images
-/// from the file's folder (and below it) through the asset protocol.
+/// Lets the frontend read and write `path`.
 fn allow_user_file<R: Runtime>(app: &AppHandle<R>, path: &str) {
     app.state::<FileAccess>().allow(path);
+}
 
-    if let Some(directory) = Path::new(path).parent() {
-        let _ = app.asset_protocol_scope().allow_directory(directory, true);
+/// Image types the editor shows. Only files with these extensions are ever
+/// made readable through the asset protocol.
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "jfif", "gif", "webp", "avif", "svg", "bmp", "ico", "apng",
+];
+
+/// The real path of an image a document refers to, if it may be shown: an
+/// existing file with an image extension (checked after resolving links, so
+/// a link named like an image cannot expose another file).
+fn image_file_to_allow(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
     }
+
+    let real_path = dunce::canonicalize(path).ok()?;
+    let is_image = real_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| IMAGE_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str()))
+        .unwrap_or(false);
+
+    (is_image && real_path.is_file()).then_some(real_path)
+}
+
+/// Makes one image that an open document refers to readable through the
+/// asset protocol, and returns the path to load it from. Nothing else is
+/// readable: no folders, no other file types.
+#[tauri::command]
+async fn allow_image_file<R: Runtime>(
+    app: AppHandle<R>,
+    path: String,
+) -> Result<Option<String>, String> {
+    let Some(real_path) = image_file_to_allow(Path::new(&path)) else {
+        return Ok(None);
+    };
+
+    app.asset_protocol_scope()
+        .allow_file(&real_path)
+        .map_err(|error| format!("failed to allow image: {error}"))?;
+
+    Ok(Some(real_path.to_string_lossy().to_string()))
 }
 
 /// Reads a file the user chose and allows the frontend to save back to it.
@@ -1002,7 +1040,8 @@ pub fn run() {
             sync_view_menu,
             take_pending_open_files,
             request_quit,
-            cancel_quit
+            cancel_quit,
+            allow_image_file
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MarkdownPad");
@@ -1120,6 +1159,32 @@ mod tests {
         assert_eq!(file.line_ending, LineEnding::Crlf);
         assert_eq!(file.stamp.map(|stamp| stamp.size), Some(18));
         assert!(!file.path.starts_with("\\\\?\\"));
+
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn only_existing_image_files_can_be_allowed() {
+        let directory =
+            env::temp_dir().join(format!("markdownpad-image-test-{}", std::process::id()));
+        fs::create_dir_all(directory.join("sub")).unwrap();
+        let image = directory.join("cat 1.PNG");
+        let note = directory.join("secret.md");
+        fs::write(&image, b"png").unwrap();
+        fs::write(&note, b"text").unwrap();
+
+        assert_eq!(
+            image_file_to_allow(&directory.join("sub").join("..").join("cat 1.PNG")),
+            Some(dunce::canonicalize(&image).unwrap())
+        );
+        assert_eq!(image_file_to_allow(&note), None, "not an image type");
+        assert_eq!(image_file_to_allow(&directory.join("missing.png")), None);
+        assert_eq!(
+            image_file_to_allow(Path::new("cat 1.PNG")),
+            None,
+            "relative"
+        );
+        assert_eq!(image_file_to_allow(&directory), None, "a folder");
 
         fs::remove_dir_all(&directory).unwrap();
     }

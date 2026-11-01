@@ -6,7 +6,7 @@ import {
 } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { MarkdownPrintDocument } from "./markdown";
-import { resolveImageReference } from "./paths";
+import { imageReferenceTarget } from "./paths";
 import { normalizeLineEndings } from "./state";
 import type {
   DocumentTab,
@@ -83,16 +83,49 @@ export function isTauriRuntime() {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
-/** Image reference -> loadable URL for the document at `documentPath`. */
-export function resolveImageSource(
+// Images already made readable, by file path. Failures are not kept, so an
+// image that appears later (or a fixed reference) loads on the next try.
+const grantedImageUrls = new Map<string, Promise<string | null>>();
+
+/**
+ * Turns an image reference in the document at `documentPath` into a URL the
+ * webview can load, or null when it cannot be shown. Inside Tauri a local
+ * image is first made readable through the asset protocol; the Rust side
+ * grants exactly that file, and only if it is an existing image.
+ */
+export function loadImageSource(
   source: string,
   documentPath: string | null,
-): string | null {
-  return resolveImageReference(
-    source,
-    documentPath,
-    isTauriRuntime() ? (path) => convertFileSrc(path) : null,
-  );
+): Promise<string | null> {
+  const target = imageReferenceTarget(source, documentPath, isTauriRuntime());
+
+  if (!target) {
+    return Promise.resolve(null);
+  }
+
+  if (target.kind === "url") {
+    return Promise.resolve(target.url);
+  }
+
+  const known = grantedImageUrls.get(target.path);
+
+  if (known) {
+    return known;
+  }
+
+  const granted = invoke<string | null>("allow_image_file", { path: target.path })
+    .then((realPath) => (realPath ? convertFileSrc(realPath) : null))
+    .catch(() => null)
+    .then((url) => {
+      if (!url) {
+        grantedImageUrls.delete(target.path);
+      }
+
+      return url;
+    });
+
+  grantedImageUrls.set(target.path, granted);
+  return granted;
 }
 
 /** Turns an error from a command (a string from Rust) into a message. */

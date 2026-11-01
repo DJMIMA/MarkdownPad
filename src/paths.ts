@@ -66,19 +66,24 @@ export function decodePathReference(reference: string) {
   }
 }
 
+/** Where an image reference in a document points. */
+export type ImageTarget =
+  | { kind: "url"; url: string }
+  | { kind: "file"; path: string };
+
 /**
- * Turns an image reference from a document into a URL the webview can load.
- * Web and data URLs are used as they are. Inside Tauri (`toFileUrl` given),
- * relative paths are resolved against the document's folder, and absolute
- * paths and file: URLs are served through the asset protocol. Anything else
- * (other schemes, or a relative path in a never-saved document) shows no
- * image. Without Tauri only what the web server can serve is shown.
+ * Resolves an image reference from a document. Web and data URLs are used
+ * as they are. Where local files can be shown (`canReadFiles`, i.e. inside
+ * Tauri), relative paths are resolved against the document's folder, and
+ * absolute paths and file: URLs name a file. Anything else (other schemes,
+ * or a relative path in a never-saved document) shows no image. Without
+ * Tauri only what the web server can serve is shown.
  */
-export function resolveImageReference(
+export function imageReferenceTarget(
   source: string,
   documentPath: string | null,
-  toFileUrl: ((path: string) => string) | null,
-): string | null {
+  canReadFiles: boolean,
+): ImageTarget | null {
   const reference = source.trim();
 
   if (!reference) {
@@ -86,14 +91,14 @@ export function resolveImageReference(
   }
 
   if (/^(https?:|data:image\/)/i.test(reference)) {
-    return reference;
+    return { kind: "url", url: reference };
   }
 
   const hasScheme =
     /^[a-z][a-z0-9+.-]*:/i.test(reference) && !/^[a-z]:[\\/]/i.test(reference);
 
-  if (!toFileUrl) {
-    return hasScheme ? null : reference;
+  if (!canReadFiles) {
+    return hasScheme ? null : { kind: "url", url: reference };
   }
 
   let path: string | null = null;
@@ -116,5 +121,20 @@ export function resolveImageReference(
     }
   }
 
-  return path ? toFileUrl(path) : null;
+  return path ? { kind: "file", path } : null;
+}
+
+/** imageReferenceTarget, with files turned into URLs by `toFileUrl`. */
+export function resolveImageReference(
+  source: string,
+  documentPath: string | null,
+  toFileUrl: ((path: string) => string) | null,
+): string | null {
+  const target = imageReferenceTarget(source, documentPath, toFileUrl !== null);
+
+  if (!target) {
+    return null;
+  }
+
+  return target.kind === "url" ? target.url : toFileUrl!(target.path);
 }

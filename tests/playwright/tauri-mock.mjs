@@ -1,8 +1,9 @@
 // Runs the app as if inside Tauri by installing a scripted stand-in for
 // window.__TAURI_INTERNALS__ before the page loads. Commands answer from
-// `responses` (a value, { sequence: [...] } answered in order with the last
-// one repeating, or { error: "message" } to reject); every call is recorded
-// in window.__tauriMock.calls. Tests can fire events with
+// `responses`: a value, { sequence: [...] } answered in order with the last
+// one repeating, { byArg: "name", values: {...}, otherwise } picked by one
+// argument, or { error: "message" } to reject. Every call is recorded in
+// window.__tauriMock.calls. Tests can fire events with
 // window.__tauriMock.emit(event, payload).
 export async function installTauriMock(page, { label = "main", responses = {} } = {}) {
   await page.addInitScript(
@@ -20,7 +21,7 @@ export async function installTauriMock(page, { label = "main", responses = {} } 
         },
       };
 
-      function answer(command) {
+      function answer(command, args) {
         const entry = mock.responses[command];
 
         if (entry === undefined) {
@@ -32,7 +33,9 @@ export async function installTauriMock(page, { label = "main", responses = {} } 
             ? entry.sequence.length > 1
               ? entry.sequence.shift()
               : entry.sequence[0]
-            : entry;
+            : entry && typeof entry.byArg === "string"
+              ? entry.values[args?.[entry.byArg]] ?? entry.otherwise ?? null
+              : entry;
 
         if (value && typeof value === "object" && "error" in value) {
           throw value.error;
@@ -84,7 +87,7 @@ export async function installTauriMock(page, { label = "main", responses = {} } 
             return null;
           }
 
-          return answer(command);
+          return answer(command, args);
         },
       };
     },

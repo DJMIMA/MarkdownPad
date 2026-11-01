@@ -23,6 +23,7 @@ import {
   listenToOpenFilesRequested,
   listenToQuitRequested,
   listenToWindowFocus,
+  loadImageSource,
   loadLaunchMarkdownFiles,
   loadRecoverySnapshots,
   type MenuAction,
@@ -35,7 +36,6 @@ import {
   type RecoveryCandidate,
   reloadMarkdownFile,
   requestQuit,
-  resolveImageSource,
   saveMarkdownFile,
   saveRecoverySnapshot,
   syncNativeViewMenu,
@@ -661,9 +661,23 @@ function App() {
           break;
         case "print": {
           const { markdownPrintDocument } = await import("./markdown");
+          // Images are made readable (and their URLs looked up) before the
+          // document is rendered for the print window.
+          const imageUrls = new Map<string, string | null>();
+          markdownPrintDocument(activeTab.content, activeTab.title, (source) => {
+            imageUrls.set(source, null);
+            return null;
+          });
+          await Promise.all(
+            [...imageUrls.keys()].map(async (source) => {
+              imageUrls.set(source, await loadImageSource(source, activeTab.path));
+            }),
+          );
           await printMarkdownDocument(
-            markdownPrintDocument(activeTab.content, activeTab.title, (source) =>
-              resolveImageSource(source, activeTab.path),
+            markdownPrintDocument(
+              activeTab.content,
+              activeTab.title,
+              (source) => imageUrls.get(source) ?? null,
             ),
           );
           break;

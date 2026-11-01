@@ -5,6 +5,7 @@ import {
   directoryOf,
   fileUrlToPath,
   isAbsolutePath,
+  imageReferenceTarget,
   joinPath,
   resolveImageReference,
 } from "../src/paths.ts";
@@ -51,4 +52,23 @@ test("resolveImageReference serves local images through the file URL scheme in T
   assert.equal(resolveImageReference("https://example.com/a.png", document, toFileUrl), "https://example.com/a.png");
   assert.equal(resolveImageReference("javascript:alert(1)", document, toFileUrl), null);
   assert.equal(resolveImageReference("images/a.png", null, toFileUrl), null, "unsaved documents have no folder");
+});
+
+test("imageReferenceTarget tells web images from files the app must grant", () => {
+  const document = "C:\\notes\\daily\\memo.md";
+
+  assert.deepEqual(imageReferenceTarget("../shared/a.png", document, true), {
+    kind: "file",
+    path: "C:\\notes\\shared\\a.png",
+  });
+  assert.deepEqual(imageReferenceTarget("https://example.com/a.png", document, true), {
+    kind: "url",
+    url: "https://example.com/a.png",
+  });
+  assert.deepEqual(imageReferenceTarget("images/a.png", document, false), {
+    kind: "url",
+    url: "images/a.png",
+  });
+  assert.equal(imageReferenceTarget("javascript:alert(1)", document, true), null);
+  assert.equal(imageReferenceTarget("a.png", null, true), null);
 });

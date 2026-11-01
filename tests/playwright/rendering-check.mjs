@@ -3,7 +3,7 @@
 // unclosed code fences, and images next to the opened file.
 import assert from "node:assert/strict";
 import { launchBrowser } from "./launch.mjs";
-import { installTauriMock } from "./tauri-mock.mjs";
+import { installTauriMock, tauriCalls } from "./tauri-mock.mjs";
 
 const baseUrl = process.env.MARKDOWNPAD_URL ?? "http://127.0.0.1:1420";
 const blankUrl = new URL("?blank=1", baseUrl).toString();
@@ -76,7 +76,9 @@ try {
     await page.close();
   }
 
-  // Inside Tauri, a relative image is loaded from the document's folder.
+  // Inside Tauri, each image the document refers to is made readable on its
+  // own (also outside the document's folder) and loaded from there; one that
+  // cannot be shown leaves its alt text instead of a broken icon.
   {
     const page = await browser.newPage({ viewport: { width: 1100, height: 760 } });
     page.on("pageerror", (error) => errors.push(error.message));
@@ -88,7 +90,17 @@ try {
             file: {
               title: "memo.md",
               path: "C:\\notes\\memo.md",
-              content: "本文\n\n![猫](images/cat%201.png \"タイトル\")\n\n末尾",
+              content: [
+                "本文",
+                "",
+                '![猫](images/cat%201.png "タイトル")',
+                "",
+                "![共有](../shared/dog.png)",
+                "",
+                "![ない画像](missing.png)",
+                "",
+                "末尾",
+              ].join("\n"),
               encoding: "utf-8",
               lineEnding: "lf",
               stamp: { modifiedMs: 1, size: 1 },
@@ -97,18 +109,50 @@ try {
           },
         ],
         load_recovery_snapshots: [],
+        allow_image_file: {
+          byArg: "path",
+          values: {
+            "C:\\notes\\images\\cat 1.png": "C:\\notes\\images\\cat 1.png",
+            "C:\\shared\\dog.png": "C:\\shared\\dog.png",
+          },
+          otherwise: null,
+        },
       },
     });
+    // Stand-in for Tauri's asset protocol: serve a 1x1 PNG.
+    await page.route("http://asset.localhost/**", (route) =>
+      route.fulfill({
+        contentType: "image/png",
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+      }),
+    );
     await page.goto(baseUrl, { waitUntil: "networkidle" });
-    await page.waitForSelector(".cm-md-image-preview img");
-    const image = await page.evaluate(() => {
-      const img = document.querySelector(".cm-md-image-preview img");
-      return { src: img.getAttribute("src"), alt: img.alt };
-    });
-    assert.deepEqual(image, {
-      src: `http://asset.localhost/${encodeURIComponent("C:\\notes\\images\\cat 1.png")}`,
-      alt: "猫",
-    });
+    await page.waitForSelector(".cm-md-image-unavailable");
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll(".cm-md-image-preview img[src]")].every(
+        (image) => image.complete,
+      ),
+    );
+    const images = await page.evaluate(() =>
+      [...document.querySelectorAll(".cm-md-image-preview")].map((figure) => ({
+        src: figure.querySelector("img").getAttribute("src"),
+        caption: figure.querySelector("figcaption").textContent,
+        unavailable: figure.classList.contains("cm-md-image-unavailable"),
+      })),
+    );
+    const assetUrl = (path) => `http://asset.localhost/${encodeURIComponent(path)}`;
+    assert.deepEqual(images, [
+      { src: assetUrl("C:\\notes\\images\\cat 1.png"), caption: "猫", unavailable: false },
+      { src: assetUrl("C:\\shared\\dog.png"), caption: "共有", unavailable: false },
+      { src: null, caption: "ない画像", unavailable: true },
+    ]);
+    assert.deepEqual(
+      (await tauriCalls(page, "allow_image_file")).map((call) => call.path).sort(),
+      ["C:\\notes\\images\\cat 1.png", "C:\\notes\\missing.png", "C:\\shared\\dog.png"],
+    );
     await page.close();
   }
 

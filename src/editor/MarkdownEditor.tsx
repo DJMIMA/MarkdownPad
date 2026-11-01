@@ -51,7 +51,7 @@ import {
   selectedTableCellsText,
   writeClipboardText,
 } from "./livePreview";
-import { resolveImageSource } from "../platform";
+import { loadImageSource } from "../platform";
 import { markdownPadKeymap } from "./markdownKeymap";
 import { readingMode as readingModeExtension } from "./readingMode";
 
@@ -382,7 +382,10 @@ function selectedText(view: EditorView) {
 }
 
 function imageResolverFor(documentPath: string | null) {
-  return imageSourceResolver.of((source) => resolveImageSource(source, documentPath));
+  return imageSourceResolver.of({
+    key: documentPath ?? "",
+    load: (source) => loadImageSource(source, documentPath),
+  });
 }
 
 // EditorView.theme mounts a new style rule set on every call, so build each
@@ -702,6 +705,12 @@ function buildEditorTheme(zoom: number, wordWrap: boolean) {
     ".cm-md-image-preview figcaption": {
       color: "var(--mp-ed-caption)",
       fontSize: "0.86em",
+    },
+    ".cm-md-image-preview:not(.cm-md-image-unavailable) figcaption:empty": {
+      display: "none",
+    },
+    ".cm-md-image-unavailable img": {
+      display: "none",
     },
     ".cm-panels": {
       borderTop: "0",
