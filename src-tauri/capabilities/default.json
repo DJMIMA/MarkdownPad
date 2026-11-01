@@ -1,15 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default desktop capability for MarkdownPad",
-  "windows": ["main", "markdownpad-*"],
+  "description": "Editor windows: window and event basics, opening new editor and print windows",
+  "windows": [
+    "main",
+    "markdownpad-*"
+  ],
   "permissions": [
     "core:default",
-    "core:window:allow-close",
-    "core:window:allow-create",
     "core:window:allow-destroy",
-    "core:webview:allow-create-webview-window",
-    "core:webview:allow-print",
-    "opener:default"
+    "core:webview:allow-create-webview-window"
   ]
 }

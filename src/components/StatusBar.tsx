@@ -1,3 +1,6 @@
+import { encodingLabel, lineEndingLabel } from "../state";
+import type { LineEnding, TextEncoding } from "../types";
+
 interface StatusBarProps {
   path: string | null;
   dirty: boolean;
@@ -7,6 +10,8 @@ interface StatusBarProps {
   words: number;
   wordWrap: boolean;
   readingMode: boolean;
+  encoding?: TextEncoding;
+  lineEnding?: LineEnding;
 }
 
 export function StatusBar({
@@ -18,6 +23,8 @@ export function StatusBar({
   words,
   wordWrap,
   readingMode,
+  encoding,
+  lineEnding,
 }: StatusBarProps) {
   return (
     <footer className="status-bar">
@@ -30,6 +37,8 @@ export function StatusBar({
       <span>{words} 語</span>
       <span>{dirty ? "未保存" : "保存済み"}</span>
       <span>{wordWrap ? "折り返し" : "折り返しなし"}</span>
+      <span>{encodingLabel(encoding)}</span>
+      <span>{lineEndingLabel(lineEnding)}</span>
     </footer>
   );
 }

@@ -83,6 +83,15 @@ jobs:
       - name: Reading mode check
         run: node tests/playwright/reading-mode-check.mjs
 
+      - name: Editor safety check
+        run: node tests/playwright/editor-safety-check.mjs
+
+      - name: File flows check
+        run: node tests/playwright/file-flows-check.mjs
+
+      - name: Rendering check
+        run: node tests/playwright/rendering-check.mjs
+
       - name: Upload screenshots and dev server log
         if: always()
         uses: actions/upload-artifact@v7

@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "./App.css";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 const root = ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
 const isPrintRoute = new URLSearchParams(window.location.search).has("print");
@@ -17,7 +18,9 @@ if (isPrintRoute) {
   void import("./App").then(({ default: App }) => {
     root.render(
       <React.StrictMode>
-        <App />
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
       </React.StrictMode>,
     );
   });

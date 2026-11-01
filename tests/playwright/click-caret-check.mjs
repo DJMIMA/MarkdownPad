@@ -7,7 +7,7 @@
 // Also checks the caret follows the theme token instead of staying black in
 // dark mode.
 import assert from "node:assert/strict";
-import { chromium } from "playwright";
+import { launchBrowser } from "./launch.mjs";
 
 const baseUrl = process.env.MARKDOWNPAD_URL ?? "http://127.0.0.1:1420";
 const blankUrl = new URL("?blank=1", baseUrl).toString();
@@ -23,7 +23,7 @@ const sampleMarkdown = [
   "最後の段落 alpha beta",
 ].join("\n");
 
-const browser = await chromium.launch({ channel: "chrome", headless: true });
+const browser = await launchBrowser();
 try {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const consoleErrors = [];

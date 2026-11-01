@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
-import { chromium } from "playwright";
+import { launchBrowser } from "./launch.mjs";
 
 const baseUrl = process.env.MARKDOWNPAD_URL ?? "http://127.0.0.1:1420";
 const blankUrl = new URL("?blank=1", baseUrl).toString();
@@ -167,9 +167,7 @@ async function run() {
     recursive: true,
   });
 
-  const browser = await chromium.launch({
-    channel: "chrome",
-    headless: true,
+  const browser = await launchBrowser({
     // Keep real scrollbars so clicks on a wide table's scrollbar can be tested.
     ignoreDefaultArgs: ["--hide-scrollbars"],
   });

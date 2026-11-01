@@ -167,6 +167,13 @@ export function shortcutCommandFromEvent(
   }
 }
 
-export function commandEdit(action: "cut" | "copy" | "paste") {
-  document.execCommand(action);
+/**
+ * F5 / Ctrl+R (and their variants) would reload the window like a web page.
+ * Inside the app that only loses state, so these keys are swallowed.
+ */
+export function isReloadShortcut(event: KeyboardEvent) {
+  return (
+    event.key === "F5" ||
+    ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "r")
+  );
 }
