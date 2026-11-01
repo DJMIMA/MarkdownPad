@@ -465,7 +465,8 @@ Markdown ファイルは信頼できない入力として扱います。WebView 
   `CHANGELOG.md` の `[Unreleased]` に日本語で追記する。テストや内部整理
   だけの変更は書かない。
 - バージョンは `package.json`、`src-tauri/tauri.conf.json`、
-  `src-tauri/Cargo.toml`（と `Cargo.lock`）の 3 か所でそろえる。
+  `src-tauri/Cargo.toml` の 3 か所（と `package-lock.json`、`Cargo.lock`）
+  でそろえる。
   `tests/version.test.ts` がこれらと `CHANGELOG.md` の節の有無を検査する。
 - Windows はインストーラーなしの exe 配布（zip）とする。`bundle.active` は
   `false` のままにし、インストーラーやアップデーターを明示承認なしに
@@ -473,9 +474,23 @@ Markdown ファイルは信頼できない入力として扱います。WebView 
   `.github/workflows/release.yml` が作る。
 - アイコンは `src-tauri/icons/app-icon.png` を元に `npx tauri icon` で
   生成する。手で描き直したり、別の元画像を足したりしない。
+- MarkdownPad 自体は MIT ライセンス。配布 zip には `LICENSE.txt` と、
+  組み込んだ npm パッケージ・Rust クレートのライセンスをまとめた
+  `THIRD-PARTY-NOTICES.txt`（`scripts/third-party-notices.mjs` が生成）を
+  入れる。依存関係を足すときは、そのライセンスが
+  `src-tauri/about.toml` の `accepted` に入っているかを確かめる。GPL など
+  配布条件を変えるライセンスの依存関係は、明示承認なしに足さない。
 
 ## ドキュメント運用
 
-- プロダクト判断は `README.md`、実装者向け判断基準はこのファイルに残す。
-- 大きな制約や技術方針を変えるときは、両方のファイルを更新する。
-- プラグイン、Vault、IDE 的機能を、明示承認なしにロードマップへ入れない。
+- ドキュメントは読み手ごとに分ける。
+  - `README.md`: 利用者向け。特長、インストール、使い方、対応する
+    Markdown。開発手順、内部の仕組み、型定義は書かない。
+  - `docs/development.md`: 開発者向け。環境構築、検査コマンド、ビルド、
+    CI、リリース手順。
+  - このファイル: 製品の仕様と実装の判断基準。
+- 利用者から見える挙動（操作、ショートカット、保存の仕方、動作環境）を
+  変えたら `README.md` を、開発やリリースの手順を変えたら
+  `docs/development.md` を、同じ変更で更新する。
+- プラグイン、Vault、IDE 的機能を、明示承認なしに計画やドキュメントへ
+  入れない。
