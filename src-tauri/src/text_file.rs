@@ -282,6 +282,17 @@ fn replace_with(temporary: &Path, target: &Path) -> io::Result<()> {
 /// data goes to a temporary file in the same directory, is flushed to disk,
 /// and then replaces the target in one step.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    // A read-only file is left alone. Replacing it would bypass the flag
+    // (a rename does on most systems), and on Windows ReplaceFileW can stop
+    // halfway for one, with the original renamed or the temporary copy
+    // inheriting the read-only flag.
+    if fs::metadata(path).is_ok_and(|metadata| metadata.permissions().readonly()) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "読み取り専用のファイルです。「名前を付けて保存」で別のファイルに保存できます。",
+        ));
+    }
+
     let temporary = temporary_sibling(path)?;
     let result = (|| {
         let mut file = fs::OpenOptions::new()
@@ -385,6 +396,34 @@ mod tests {
     fn rejects_utf16_with_a_dangling_byte() {
         assert!(decode_text(&[0xFF, 0xFE, 0x41, 0x00, 0x42]).is_err());
         assert_eq!(decode_text(&[0xFF, 0xFE, 0x41, 0x00]).unwrap().content, "A");
+    }
+
+    #[test]
+    fn refuses_to_replace_a_read_only_file() {
+        let directory =
+            std::env::temp_dir().join(format!("markdownpad-readonly-test-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("locked.md");
+        fs::write(&path, b"original").unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+
+        let error = write_atomically(&path, b"changed").unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(
+            fs::read_dir(&directory).unwrap().count(),
+            1,
+            "no temporary file is created"
+        );
+
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&path, permissions).unwrap();
+        fs::remove_dir_all(&directory).unwrap();
     }
 
     #[test]
