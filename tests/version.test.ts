@@ -8,12 +8,14 @@ const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.ur
 const packageVersion: string = JSON.parse(read("package.json")).version;
 
 test("version is the same in package.json, tauri.conf.json and Cargo.toml", () => {
+  const packageLockVersion = JSON.parse(read("package-lock.json")).version;
   const tauriVersion = JSON.parse(read("src-tauri/tauri.conf.json")).version;
   const cargoVersion = read("src-tauri/Cargo.toml").match(/^version = "([^"]+)"/m)?.[1];
   const lockVersion = read("src-tauri/Cargo.lock").match(
     /name = "markdownpad"\r?\nversion = "([^"]+)"/,
   )?.[1];
 
+  assert.equal(packageLockVersion, packageVersion);
   assert.equal(tauriVersion, packageVersion);
   assert.equal(cargoVersion, packageVersion);
   assert.equal(lockVersion, packageVersion);

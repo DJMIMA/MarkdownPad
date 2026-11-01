@@ -8,6 +8,18 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-01
+
+アプリの動作は 0.1.0 から変わりません。説明書きを利用者向けに整えた
+リリースです。
+
+### 変更
+
+- README を利用者向けに書き直した。インストールの手順、`.md` ファイルの
+  関連付け、更新とアンインストール、使い方、キーボードショートカットを
+  載せている。
+- ビルドやリリースなど開発者向けの説明を `docs/development.md` に移した。
+
 ## [0.1.0] - 2026-11-01
 
 最初の正式リリースです。Windows 向けに、インストーラーなしで直接起動
@@ -35,5 +47,6 @@
   使っていたウインドウの新しいタブで開く。
 - アプリのアイコン。
 
-[Unreleased]: https://github.com/DJMIMA/MarkdownPad/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/DJMIMA/MarkdownPad/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/DJMIMA/MarkdownPad/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/DJMIMA/MarkdownPad/releases/tag/v0.1.0
