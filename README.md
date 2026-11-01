@@ -289,8 +289,17 @@ sudo apt-get install -y --no-install-recommends \
   librsvg2-dev libxdo-dev libssl-dev pkg-config build-essential
 ```
 
-`src-tauri/icons/` のアイコンは `icon.ico` を元に `npx tauri icon` で
-生成しています。Linux ビルドは `icon.png` を使います。
+`src-tauri/icons/` のアイコンは、元画像 `src-tauri/icons/app-icon.png`
+（1024×1024、背景透過）から `npx tauri icon` で生成しています。使うのは
+`icon.ico`（Windows）、`icon.icns`（macOS）、`icon.png` と各サイズの PNG
+（Linux）だけで、Android / iOS / Microsoft Store 向けの画像は置きません。
+アイコンを変えるときは元画像を差し替えて、次のように一時フォルダへ生成して
+から必要なファイルだけを上書きします。画面の favicon（`public/favicon.png`）
+は `64x64.png` の複製です。
+
+```powershell
+npx tauri icon src-tauri/icons/app-icon.png -o $env:TEMP\markdownpad-icons
+```
 
 ## CI
 
@@ -340,10 +349,50 @@ src-tauri\target\release\markdownpad.exe
 `cargo clean` などで `src-tauri\target` 配下が消えた場合も、同じ
 `npm run tauri -- build` をもう一度実行すれば再生成できます。
 
-現在の Tauri 設定では `bundle.active` が `false` のため、インストーラー
-ではなく直接起動用の exe が生成されます。インストーラーを作る場合は
-`bundle.active` を `true` にします。`.md` / `.markdown` のファイル関連付け
-（`bundle.fileAssociations`）は設定済みで、インストーラーに含まれます。
+Windows 版はインストーラーを作らず、この exe をそのまま配布します。その
+ため Tauri 設定の `bundle.active` は `false` のままにします。
+`bundle.fileAssociations` は将来インストーラーを作る場合のための設定で、
+今の配布形式では `.md` / `.markdown` の関連付けは登録されません。関連付けは
+エクスプローラーの「プログラムから開く」で利用者が設定します。
+
+## リリース
+
+バージョン番号は [Semantic Versioning](https://semver.org/lang/ja/) に従い、
+変更点は [`CHANGELOG.md`](CHANGELOG.md) に記録します。0.1.0 が最初の正式
+リリースです。
+
+配布物は GitHub Releases の `MarkdownPad-<バージョン>-windows-x64.zip`
+です。中身は `MarkdownPad\MarkdownPad.exe` だけで、好きな場所に展開して
+起動します。
+
+- 動作には Microsoft Edge WebView2 Runtime が必要です（Windows 11 には
+  標準で入っています）。
+- exe にはコード署名をしていないため、初回起動時に Windows SmartScreen の
+  警告が出ることがあります。
+- 復元スナップショットは exe の横ではなく、ユーザーのアプリデータ領域
+  （`%APPDATA%\com.markdownpad.app`）に保存します。テーマの選択は WebView2
+  のデータ（`%LOCALAPPDATA%\com.markdownpad.app`）に残ります。
+
+リリースの手順は次のとおりです。
+
+1. 作業中の変更は `CHANGELOG.md` の `[Unreleased]` に書きためる。
+2. リリースするときは、`[Unreleased]` の内容を新しい
+   `## [x.y.z] - YYYY-MM-DD` の節へ移し、末尾の比較リンクを更新する。
+3. `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` の
+   `version` をそろえて上げ、`src-tauri` で `cargo check` を実行して
+   `Cargo.lock` も更新する。`npm test` が、これらと `CHANGELOG.md` の
+   食い違いを検出する。
+4. `main` にマージした後、`vx.y.z` のタグを push する。
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+タグの push で `.github/workflows/release.yml` が動き、タグとバージョンの
+一致を確かめてから Windows の exe をビルドし、zip と SHA-256 のチェック
+サムを GitHub Release として公開します。リリースノートは `CHANGELOG.md` の
+該当する節（`node scripts/changelog.mjs <バージョン>` の出力）です。
 
 ## セキュリティ
 
@@ -450,3 +499,5 @@ MVP では次を確認します。
 6. 完了: アプリ内復元スナップショットと異常終了時の復元確認を実装する。
 7. 完了: 検索、置換、ズーム、折り返し、ステータスバー、印刷ブリッジを追加する。
 8. 進行中: ファイル安全性、復元、ライブプレビュー挙動を中心にテストを追加する。
+9. 完了: 0.1.0 を最初の正式リリースとして公開する。以降の変更は
+   `CHANGELOG.md` に記録する。
