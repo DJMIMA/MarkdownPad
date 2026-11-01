@@ -32,6 +32,13 @@ async function run() {
     const consoleErrors = [];
 
     await context.addInitScript(() => {
+      // Dark theme: the print window must follow it on screen and still
+      // print black on white.
+      try {
+        localStorage.setItem("markdownpad.theme.v1", "dark");
+      } catch {
+        // about:blank (a popup's first document) has no storage.
+      }
       Object.defineProperty(window, "print", {
         configurable: true,
         value: () => {
@@ -67,7 +74,9 @@ async function run() {
     await page.keyboard.press("Control+P");
     const printPage = await popupPromise;
 
-    await printPage.waitForSelector(".markdown-print-document h1");
+    await printPage.waitForSelector(".markdown-print-document h1", {
+      state: "attached",
+    });
     await printPage.waitForFunction(
       () => window.__markdownPadPrintCalls === 1,
     );
@@ -105,6 +114,33 @@ async function run() {
     ]);
     assert.match(metrics.tableText ?? "", /A\s+B\s+1\s+2/);
     assert.equal(metrics.printCalls, 1);
+
+    // On screen (around WebView2's print dialog) the window shows only a
+    // status line in the app theme; the document is drawn for paper only.
+    const appearance = () =>
+      printPage.evaluate(() => ({
+        theme: document.documentElement.dataset.theme,
+        background: getComputedStyle(document.body).backgroundColor,
+        documentDisplay: getComputedStyle(
+          document.querySelector(".markdown-print-document"),
+        ).display,
+        statusDisplay: getComputedStyle(document.querySelector(".print-status")).display,
+        headingColor: getComputedStyle(
+          document.querySelector(".markdown-print-document h1"),
+        ).color,
+      }));
+    const onScreen = await appearance();
+    assert.equal(onScreen.theme, "dark");
+    assert.equal(onScreen.background, "rgb(30, 30, 30)");
+    assert.equal(onScreen.documentDisplay, "none");
+    assert.notEqual(onScreen.statusDisplay, "none");
+
+    await printPage.emulateMedia({ media: "print" });
+    const onPaper = await appearance();
+    assert.equal(onPaper.background, "rgb(255, 255, 255)");
+    assert.equal(onPaper.documentDisplay, "block");
+    assert.equal(onPaper.statusDisplay, "none");
+    assert.equal(onPaper.headingColor, "rgb(34, 34, 34)");
 
     // Raw HTML is sanitized in the real print window.
     const safety = await printPage.evaluate(() => ({

@@ -73,9 +73,11 @@ renderer.renderer.rules.image = (tokens, index, options, env, self) => {
 };
 
 const printStyles = `
-  body {
-    margin: 0;
-    background: #ffffff;
+  @media print {
+    body {
+      margin: 0;
+      background: #ffffff;
+    }
   }
 
   .markdown-print-document {

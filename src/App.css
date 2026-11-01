@@ -263,7 +263,10 @@ button {
 }
 
 /* ==========================================================================
-   Print route — always light, independent of the app theme.
+   Print route
+   On screen the print window only shows a short status in the app theme
+   (WebView2's print dialog covers it); the document itself is drawn for
+   the printer only, always black on white.
    ========================================================================== */
 
 body.print-route,
@@ -272,18 +275,40 @@ body.print-route #root {
   height: auto;
   min-height: 100%;
   overflow: visible;
-  background: #ffffff;
+  background: var(--mp-bg);
 }
 
 body.print-route {
   min-width: 0;
 }
 
+body.print-route .print-status,
 body.print-route .print-missing {
   margin: 48px auto;
   max-width: 720px;
   padding: 0 24px;
-  color: #202d30;
+  color: var(--mp-text-secondary);
+}
+
+body.print-route .print-status {
+  font-size: 14px;
+}
+
+@media screen {
+  body.print-route .markdown-print-document {
+    display: none;
+  }
+}
+
+@media print {
+  body.print-route,
+  body.print-route #root {
+    background: #ffffff;
+  }
+
+  body.print-route .print-status {
+    display: none;
+  }
 }
 
 body.print-route .print-missing h1 {

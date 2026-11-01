@@ -110,6 +110,9 @@ export function PrintPage() {
   return (
     <>
       <style>{printDocument.styles}</style>
+      <p className="print-status" role="status">
+        印刷の準備をしています…
+      </p>
       <main
         className="markdown-print-document"
         ref={documentRef}

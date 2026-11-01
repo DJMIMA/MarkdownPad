@@ -4,10 +4,6 @@
 // inline scripts.
 (function () {
   try {
-    if (new URLSearchParams(location.search).has("print")) {
-      return;
-    }
-
     var stored = localStorage.getItem("markdownpad.theme.v1");
     var mode = stored === "light" || stored === "dark" ? stored : "system";
     var prefersDark =

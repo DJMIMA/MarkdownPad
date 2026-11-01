@@ -929,6 +929,13 @@ pub fn run() {
             Ok(())
         })
         .menu(markdownpad_menu)
+        // The app menu is attached to every window on Windows; a print
+        // window has nothing to do with it.
+        .on_page_load(|webview, _payload| {
+            if !is_editor_window_label(webview.label()) {
+                let _ = webview.window().remove_menu();
+            }
+        })
         .on_menu_event(|app, event| {
             let id = event.id().as_ref().to_string();
             let focused_window = app
