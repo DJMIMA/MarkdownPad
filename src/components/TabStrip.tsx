@@ -16,7 +16,18 @@ export function TabStrip({
   onAdd,
 }: TabStripProps) {
   return (
-    <div className="tab-strip" role="tablist" aria-label="Open tabs">
+    <div
+      className="tab-strip"
+      role="tablist"
+      aria-label="Open tabs"
+      onMouseDown={(event) => {
+        // Clicking tabs, their close buttons or "+" must not take the
+        // keyboard focus away from the editor (typing would go nowhere).
+        if (event.button === 0) {
+          event.preventDefault();
+        }
+      }}
+    >
       {tabs.map((tab) => (
         // A tab is not a <button>, so the close button inside it is not an
         // interactive element nested in another one.

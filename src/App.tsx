@@ -227,6 +227,12 @@ function App() {
     [activeTabId, updateTab],
   );
 
+  // After a tab is chosen, added or closed, typing goes to the editor (once
+  // it shows the new tab).
+  const focusEditorSoon = useCallback(() => {
+    requestAnimationFrame(() => editorRef.current?.focus());
+  }, []);
+
   const replaceAllTabs = useCallback(
     (nextTabs: DocumentTab[], nextActiveId: string) => {
       applyTabs(() => nextTabs);
@@ -1171,9 +1177,17 @@ function App() {
         <TabStrip
           tabs={tabs}
           activeTabId={activeTabId}
-          onSelect={setActiveTabId}
-          onClose={(tabId) => void closeTab(tabId)}
-          onAdd={addTab}
+          onSelect={(tabId) => {
+            setActiveTabId(tabId);
+            focusEditorSoon();
+          }}
+          onClose={(tabId) =>
+            void closeTab(tabId).then(focusEditorSoon)
+          }
+          onAdd={() => {
+            addTab();
+            focusEditorSoon();
+          }}
         />
 
         <div className="top-status" aria-label="View">

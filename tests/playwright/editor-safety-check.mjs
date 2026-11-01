@@ -208,6 +208,27 @@ try {
     await page.close();
   }
 
+  // Clicking "+" or a tab leaves the keyboard in the editor.
+  {
+    const page = await openBlankPage(browser, errors);
+    await page.click(".cm-content");
+    await page.keyboard.insertText("一枚目");
+    await page.click(".new-tab-button");
+    await page.waitForTimeout(150);
+    await page.keyboard.type("two");
+    assert.equal(await editorDoc(page), "two", "typing after + goes into the new tab");
+    await page.click(".tab-button >> nth=0");
+    await page.waitForTimeout(150);
+    await page.keyboard.press("End");
+    await page.keyboard.type("!");
+    assert.equal(await editorDoc(page), "一枚目!", "typing after a tab click goes into that tab");
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.classList.contains("cm-content")),
+      true,
+    );
+    await page.close();
+  }
+
   // Edit menu: copy, cut and paste work through the Clipboard API.
   {
     const page = await openBlankPage(browser, errors);
