@@ -457,6 +457,23 @@ Markdown ファイルは信頼できない入力として扱います。WebView 
 状態ロジックとレンダリング補助は unit test を優先します。UI ができた後は、
 エディタ操作と視覚挙動を integration/browser/Tauri テストで確認します。
 
+## リリースとバージョン
+
+- 0.1.0 が最初の正式リリース。以降は Semantic Versioning でバージョンを
+  上げる。
+- 利用者に見える変更（機能、挙動、修正、配布物）を入れたら、同じ変更で
+  `CHANGELOG.md` の `[Unreleased]` に日本語で追記する。テストや内部整理
+  だけの変更は書かない。
+- バージョンは `package.json`、`src-tauri/tauri.conf.json`、
+  `src-tauri/Cargo.toml`（と `Cargo.lock`）の 3 か所でそろえる。
+  `tests/version.test.ts` がこれらと `CHANGELOG.md` の節の有無を検査する。
+- Windows はインストーラーなしの exe 配布（zip）とする。`bundle.active` は
+  `false` のままにし、インストーラーやアップデーターを明示承認なしに
+  追加しない。配布物は `vx.y.z` タグの push で
+  `.github/workflows/release.yml` が作る。
+- アイコンは `src-tauri/icons/app-icon.png` を元に `npx tauri icon` で
+  生成する。手で描き直したり、別の元画像を足したりしない。
+
 ## ドキュメント運用
 
 - プロダクト判断は `README.md`、実装者向け判断基準はこのファイルに残す。
