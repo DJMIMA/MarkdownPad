@@ -1,3 +1,4 @@
+mod file_association;
 mod recovery;
 mod text_file;
 
@@ -797,6 +798,37 @@ fn open_external_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<(), S
         .map_err(|error| format!("failed to open external URL: {error}"))
 }
 
+#[tauri::command]
+async fn file_association_status() -> Result<file_association::AssociationStatus, String> {
+    file_association::status()
+}
+
+/// Registers MarkdownPad for Markdown files for this user (no admin rights,
+/// nothing outside HKEY_CURRENT_USER).
+#[tauri::command]
+async fn register_file_association() -> Result<file_association::AssociationStatus, String> {
+    file_association::register()
+}
+
+#[tauri::command]
+async fn unregister_file_association() -> Result<file_association::AssociationStatus, String> {
+    file_association::unregister()
+}
+
+/// Opens Windows' Default apps settings at MarkdownPad's page, where the user
+/// makes it the default (apps cannot do that themselves).
+#[tauri::command]
+fn open_default_apps_settings<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    app.opener()
+        .open_url(file_association::default_apps_settings_uri(), None::<&str>)
+        .map_err(|error| {
+            format!(
+                "Windows の設定を開けませんでした。
+{error}"
+            )
+        })
+}
+
 fn view_menu_check_item<R: Runtime>(menu: &Menu<R>, id: &str) -> Option<CheckMenuItem<R>> {
     menu.items().ok()?.into_iter().find_map(|item| {
         item.as_submenu()
@@ -853,6 +885,9 @@ fn markdownpad_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let print = MenuItemBuilder::with_id("print", "印刷")
         .accelerator("Ctrl+P")
         .build(app)?;
+    let settings = MenuItemBuilder::with_id("open-settings", "設定")
+        .accelerator("Ctrl+,")
+        .build(app)?;
     let close_tab = MenuItemBuilder::with_id("close-tab", "タブを閉じる")
         .accelerator("Ctrl+W")
         .build(app)?;
@@ -870,6 +905,8 @@ fn markdownpad_menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         .item(&save_as)
         .separator()
         .item(&print)
+        .separator()
+        .item(&settings)
         .separator()
         .item(&close_tab)
         .item(&close_window)
@@ -1041,7 +1078,11 @@ pub fn run() {
             take_pending_open_files,
             request_quit,
             cancel_quit,
-            allow_image_file
+            allow_image_file,
+            file_association_status,
+            register_file_association,
+            unregister_file_association,
+            open_default_apps_settings
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MarkdownPad");

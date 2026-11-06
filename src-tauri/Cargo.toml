@@ -26,6 +26,8 @@ tauri-plugin-single-instance = "2"
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
   "Win32_Storage_FileSystem",
+  "Win32_System_Registry",
   "Win32_UI_Controls_Dialogs",
+  "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
 ] }

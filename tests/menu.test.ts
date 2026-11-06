@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isReloadShortcut, shortcutCommandFromEvent } from "../src/menu.ts";
+import { isReloadShortcut, menuGroups, shortcutCommandFromEvent } from "../src/menu.ts";
 
 function key(init: Partial<KeyboardEvent>) {
   return {
@@ -26,4 +26,11 @@ test("F3 and Ctrl+F remain app shortcuts", () => {
   assert.equal(shortcutCommandFromEvent(key({ key: "F3" })), "find-next");
   assert.equal(shortcutCommandFromEvent(key({ key: "F3", shiftKey: true })), "find-previous");
   assert.equal(shortcutCommandFromEvent(key({ key: "f", ctrlKey: true })), "find");
+});
+
+test("Ctrl+, opens the settings from the File menu", () => {
+  assert.equal(shortcutCommandFromEvent(key({ key: ",", ctrlKey: true })), "open-settings");
+  assert.equal(shortcutCommandFromEvent(key({ key: ",", ctrlKey: true, shiftKey: true })), null);
+  const file = menuGroups({ zoom: 100, wordWrap: true, showStatusBar: true })[0];
+  assert.ok(file.items.some((item) => item.action === "open-settings" && item.label === "設定"));
 });
