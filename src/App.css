@@ -38,6 +38,8 @@
   --mp-hover: #ebebeb;
   --mp-active: #e0e0e0;
   --mp-focus-ring: rgb(47 107 208 / 45%);
+  --mp-danger: #c42b1c;
+  --mp-danger-hover: #fbeceb;
 
   /* Shadows */
   --mp-shadow-sm: 0 1px 2px rgb(0 0 0 / 6%);
@@ -158,6 +160,8 @@
   --mp-hover: #303030;
   --mp-active: #383838;
   --mp-focus-ring: rgb(110 160 240 / 55%);
+  --mp-danger: #f07167;
+  --mp-danger-hover: #3a2726;
 
   --mp-shadow-sm: 0 1px 2px rgb(0 0 0 / 30%);
   --mp-shadow-md: 0 8px 22px rgb(0 0 0 / 45%);
@@ -785,6 +789,118 @@ body.print-route .print-missing h1 {
 
 .unsaved-dialog-actions button.primary:hover {
   background: var(--mp-accent-hover);
+}
+
+/* Settings: a compact two-column table plus inline actions. */
+.settings-dialog {
+  width: min(520px, 100%);
+}
+
+.settings-section {
+  padding: 4px 20px 16px;
+}
+
+.settings-section h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-note,
+.settings-message {
+  margin: 0 0 10px;
+  color: var(--mp-text-secondary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Overrides the padding of the plain dialogs' message paragraph. */
+.settings-section p {
+  padding: 0;
+}
+
+.settings-message {
+  margin: 10px 0 0;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.settings-error {
+  color: var(--mp-danger);
+}
+
+.settings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.settings-table th,
+.settings-table td {
+  padding: 5px 8px;
+  border: 1px solid var(--mp-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.settings-table th {
+  width: 96px;
+  background: var(--mp-surface-muted);
+  font-weight: 400;
+  color: var(--mp-text-secondary);
+}
+
+.settings-path {
+  overflow-wrap: anywhere;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.settings-actions button {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--mp-border-strong);
+  border-radius: 4px;
+  background: var(--mp-surface);
+  color: var(--mp-text);
+  font-size: 13px;
+}
+
+.settings-actions button:hover:not(:disabled) {
+  background: var(--mp-hover);
+}
+
+.settings-actions button:focus-visible {
+  outline: 2px solid var(--mp-focus-ring);
+  outline-offset: 1px;
+}
+
+.settings-actions button:disabled {
+  opacity: 0.55;
+}
+
+.settings-actions button.primary {
+  border-color: transparent;
+  background: var(--mp-accent);
+  color: var(--mp-accent-contrast);
+}
+
+.settings-actions button.primary:hover:not(:disabled) {
+  background: var(--mp-accent-hover);
+}
+
+.settings-actions button.danger {
+  margin-left: auto;
+  border-color: var(--mp-danger);
+  color: var(--mp-danger);
+}
+
+.settings-actions button.danger:hover:not(:disabled) {
+  background: var(--mp-danger-hover);
 }
 
 /* ==========================================================================

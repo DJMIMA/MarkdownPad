@@ -47,6 +47,7 @@ import { TabStrip } from "./components/TabStrip";
 import { StatusBar } from "./components/StatusBar";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { ModalDialog } from "./components/ModalDialog";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { useTheme } from "./useTheme";
 import {
   countWords,
@@ -179,6 +180,8 @@ function App() {
   );
   const [recoveryDialog, setRecoveryDialog] =
     useState<RecoveryDialogState | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsOpenRef = useRef(false);
   const { resolvedTheme, toggleTheme } = useTheme();
 
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
@@ -688,6 +691,10 @@ function App() {
           );
           break;
         }
+        case "open-settings":
+          settingsOpenRef.current = true;
+          setSettingsOpen(true);
+          break;
         case "close-tab":
           await closeTab(activeTab.id);
           break;
@@ -1087,7 +1094,8 @@ function App() {
       if (
         event.defaultPrevented ||
         choiceDialogRef.current ||
-        recoveryDialogRef.current
+        recoveryDialogRef.current ||
+        settingsOpenRef.current
       ) {
         return;
       }
@@ -1251,6 +1259,16 @@ function App() {
               onClick: () => void chooseRecoveryDialog(false),
             },
           ]}
+        />
+      ) : null}
+
+      {settingsOpen ? (
+        <SettingsDialog
+          onClose={() => {
+            settingsOpenRef.current = false;
+            setSettingsOpen(false);
+            focusEditorSoon();
+          }}
         />
       ) : null}
 

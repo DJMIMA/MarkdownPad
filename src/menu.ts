@@ -55,6 +55,12 @@ export function menuGroups(
           separatorBefore: true,
         },
         {
+          action: "open-settings",
+          label: "設定",
+          shortcut: "Ctrl+,",
+          separatorBefore: true,
+        },
+        {
           action: "close-tab",
           label: "タブを閉じる",
           shortcut: "Ctrl+W",
@@ -155,6 +161,8 @@ export function shortcutCommandFromEvent(
       return event.shiftKey ? null : "replace";
     case "e":
       return event.shiftKey ? null : "toggle-reading-mode";
+    case ",":
+      return event.shiftKey ? null : "open-settings";
     case "+":
     case "=":
       return "zoom-in";

@@ -5,6 +5,10 @@ import {
   getCurrentWebviewWindow,
 } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  type FileAssociationStatus,
+  unsupportedAssociationStatus,
+} from "./fileAssociation";
 import type { MarkdownPrintDocument } from "./markdown";
 import { imageReferenceTarget } from "./paths";
 import { normalizeLineEndings } from "./state";
@@ -23,6 +27,7 @@ export type MenuAction =
   | "save"
   | "save-as"
   | "print"
+  | "open-settings"
   | "close-tab"
   | "close-window"
   | "quit"
@@ -766,4 +771,27 @@ export async function listenToOpenFilesRequested(
   return getCurrentWebviewWindow().listen("open-files-requested", () => {
     onRequested();
   });
+}
+
+/** Whether Explorer opens Markdown files with this MarkdownPad (Windows). */
+export async function loadFileAssociationStatus(): Promise<FileAssociationStatus> {
+  if (!isTauriRuntime()) {
+    return unsupportedAssociationStatus;
+  }
+
+  return await invoke<FileAssociationStatus>("file_association_status");
+}
+
+/** Registers MarkdownPad for .md / .markdown for the current user. */
+export async function registerFileAssociation(): Promise<FileAssociationStatus> {
+  return await invoke<FileAssociationStatus>("register_file_association");
+}
+
+export async function unregisterFileAssociation(): Promise<FileAssociationStatus> {
+  return await invoke<FileAssociationStatus>("unregister_file_association");
+}
+
+/** Opens MarkdownPad's page in Windows' Default apps settings. */
+export async function openDefaultAppsSettings() {
+  await invoke("open_default_apps_settings");
 }

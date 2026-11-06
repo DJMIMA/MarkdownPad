@@ -16,6 +16,7 @@ const checks = [
   "editor-safety-check.mjs",
   "file-flows-check.mjs",
   "rendering-check.mjs",
+  "settings-check.mjs",
 ];
 
 async function isUp() {
