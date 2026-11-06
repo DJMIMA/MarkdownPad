@@ -1,6 +1,6 @@
 [package]
 name = "markdownpad"
-version = "0.1.1"
+version = "0.2.0"
 description = "A lightweight Markdown editor and reader"
 authors = ["MarkdownPad contributors"]
 license = "MIT"
