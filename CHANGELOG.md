@@ -8,6 +8,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-06
+
 ### 追加
 
 - 「ファイル」メニューに「設定」（`Ctrl+,`）を追加した。設定画面から
@@ -62,6 +64,7 @@
   使っていたウインドウの新しいタブで開く。
 - アプリのアイコン。
 
-[Unreleased]: https://github.com/DJMIMA/MarkdownPad/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/DJMIMA/MarkdownPad/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/DJMIMA/MarkdownPad/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/DJMIMA/MarkdownPad/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/DJMIMA/MarkdownPad/releases/tag/v0.1.0
