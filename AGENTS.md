@@ -522,16 +522,19 @@ Markdown ファイルは信頼できない入力として扱います。WebView 
   `src-tauri/Cargo.toml` の 3 か所（と `package-lock.json`、`Cargo.lock`）
   でそろえる。
   `tests/version.test.ts` がこれらと `CHANGELOG.md` の節の有無を検査する。
-- Windows はインストーラーなしの exe 配布（zip）とする。`bundle.active` は
+- Windows はインストーラーなしの exe 配布（zip）、Linux は実行ファイルの
+  tar.gz 配布とする。Linux 版は GTK / WebKitGTK を同梱せず、利用者の
+  システムのものを使う（AppImage など LGPL のライブラリを同梱する形は、
+  そのライセンスの扱いを決めるまで足さない）。`bundle.active` は
   `false` のままにし、インストーラーやアップデーターを明示承認なしに
   追加しない。配布物は `vx.y.z` タグの push で
   `.github/workflows/release.yml` が作る。
 - アイコンは `src-tauri/icons/app-icon.png` を元に `npx tauri icon` で
   生成する。手で描き直したり、別の元画像を足したりしない。
-- MarkdownPad 自体は MIT ライセンス。配布 zip には `LICENSE.txt` と、
+- MarkdownPad 自体は MIT ライセンス。配布 zip / tar.gz には `LICENSE.txt` と、
   組み込んだ npm パッケージ・Rust クレートのライセンスをまとめた
-  `THIRD-PARTY-NOTICES.txt`（`scripts/third-party-notices.mjs` が生成）を
-  入れる。依存関係を足すときは、そのライセンスが
+  `THIRD-PARTY-NOTICES.txt`（`scripts/third-party-notices.mjs` が OS ごとに
+  生成）を入れる。依存関係を足すときは、そのライセンスが
   `src-tauri/about.toml` の `accepted` に入っているかを確かめる。GPL など
   配布条件を変えるライセンスの依存関係は、明示承認なしに足さない。
 

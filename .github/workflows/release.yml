@@ -1,12 +1,18 @@
 name: Release
 
-# Pushing a tag such as v0.1.0 builds the Windows exe and publishes it as a
-# GitHub Release. There is no installer: the release carries a zip with the
-# exe, LICENSE.txt and THIRD-PARTY-NOTICES.txt, and the notes come from that
+# Pushing a tag such as v0.1.0 builds the app for Windows and Linux and
+# publishes it as a GitHub Release. There is no installer: the release
+# carries a Windows zip and a Linux tar.gz, each with the executable,
+# LICENSE.txt and THIRD-PARTY-NOTICES.txt, and the notes come from that
 # version's CHANGELOG.md section.
+#
+# Running the workflow by hand (workflow_dispatch) builds both packages and
+# keeps them as workflow artifacts without publishing, to try the build
+# before tagging.
 on:
   push:
     tags: ["v*.*.*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -31,7 +37,7 @@ jobs:
       - name: Check the tag matches the app version
         run: |
           version=$(node -p "require('./package.json').version")
-          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
             echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${version}" >&2
             exit 1
           fi
@@ -60,7 +66,7 @@ jobs:
       - name: Third-party notices
         run: |
           mkdir -p release/MarkdownPad
-          node scripts/third-party-notices.mjs release/MarkdownPad/THIRD-PARTY-NOTICES.txt
+          node scripts/third-party-notices.mjs release/MarkdownPad/THIRD-PARTY-NOTICES.txt x86_64-pc-windows-msvc
 
       - name: Package
         shell: pwsh
@@ -72,15 +78,112 @@ jobs:
           $hash = (Get-FileHash "release/$zip" -Algorithm SHA256).Hash.ToLower()
           "$hash  $zip" | Set-Content -NoNewline -Encoding ascii "release/$zip.sha256"
 
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: |
+            release/*.zip
+            release/*.zip.sha256
+          if-no-files-found: error
+
+  linux:
+    name: Linux binary
+    # The oldest supported runner, so the binary needs only an older glibc
+    # and runs on more distributions.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install GTK and WebKitGTK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libxdo-dev libssl-dev pkg-config build-essential
+
+      - run: npm ci
+
+      - name: Check the tag matches the app version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package.json version ${version}" >&2
+            exit 1
+          fi
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+
+      - name: Unit tests
+        run: npm test
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      # bundle.active is false, so this builds the bare binary. GTK and
+      # WebKitGTK are not bundled: the binary uses the system's libraries.
+      - name: Build
+        run: npm run tauri -- build
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+
+      - name: Third-party notices
+        run: |
+          mkdir -p release/MarkdownPad
+          node scripts/third-party-notices.mjs release/MarkdownPad/THIRD-PARTY-NOTICES.txt x86_64-unknown-linux-gnu
+
+      - name: Package
+        run: |
+          archive="MarkdownPad-${VERSION}-linux-x64.tar.gz"
+          install -m755 src-tauri/target/release/markdownpad release/MarkdownPad/markdownpad
+          cp LICENSE release/MarkdownPad/LICENSE.txt
+          tar -C release --owner=0 --group=0 -czf "release/${archive}" MarkdownPad
+          (cd release && sha256sum "${archive}" > "${archive}.sha256")
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: |
+            release/*.tar.gz
+            release/*.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [windows, linux]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: release
+          merge-multiple: true
+
       - name: Release notes
-        run: node scripts/changelog.mjs "$VERSION" > release/notes.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          node scripts/changelog.mjs "$version" > notes.md
 
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          zip_name="MarkdownPad-${VERSION}-windows-x64.zip"
+          version="${GITHUB_REF_NAME#v}"
           gh release create "${GITHUB_REF_NAME}" \
-            --title "MarkdownPad ${VERSION}" \
-            --notes-file release/notes.md \
-            "release/$zip_name" "release/$zip_name.sha256"
+            --title "MarkdownPad ${version}" \
+            --notes-file notes.md \
+            release/*

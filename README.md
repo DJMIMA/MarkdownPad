@@ -1,7 +1,7 @@
 # MarkdownPad
 
 Markdown ファイルを、メモ帳の手軽さで開いて、きれいに読み書きできる
-Windows アプリです。
+Windows アプリです。Linux 版もあります。
 
 Obsidian は表示が美しい一方で、ノートを Vault で管理する前提です。
 VS Code は、少し読んで直すだけには大がかりです。メモ帳は軽いものの、
@@ -27,7 +27,8 @@ Markdown を整形して表示できません。MarkdownPad はその間を埋�
 
 ## インストール
 
-インストーラーはありません。zip を展開して、中の exe を起動するだけです。
+インストーラーはありません。Windows は zip を展開して、中の exe を起動
+するだけです。Linux は [下記](#linux) を参照してください。
 
 1. [Releases](https://github.com/DJMIMA/MarkdownPad/releases/latest)
    から `MarkdownPad-<バージョン>-windows-x64.zip` をダウンロードする。
@@ -46,6 +47,30 @@ exe にはコード署名をしていないため、初回の起動時に「Wind
 PC が保護されました」と表示されることがあります。その場合は「詳細情報」
 →「実行」で起動できます。
 
+### Linux
+
+1. [Releases](https://github.com/DJMIMA/MarkdownPad/releases/latest)
+   から `MarkdownPad-<バージョン>-linux-x64.tar.gz` をダウンロードする。
+2. 展開して、実行ファイル `markdownpad` をパスの通った場所に置く。
+
+   ```bash
+   tar -xzf MarkdownPad-<バージョン>-linux-x64.tar.gz
+   install -Dm755 MarkdownPad/markdownpad ~/.local/bin/markdownpad
+   ```
+
+3. `markdownpad` を起動する。開くファイルを引数で渡すこともできます。
+
+tar.gz には `markdownpad` のほか、ライセンス文（`LICENSE.txt`、
+`THIRD-PARTY-NOTICES.txt`）が入っています。
+
+動作環境は 64 ビット（x86_64）の Linux で、GTK 3 と WebKitGTK 4.1 が
+必要です。Ubuntu 22.04 以降、Debian 12 以降などで動きます。入っていない
+場合は、Ubuntu / Debian なら次のコマンドで入ります。
+
+```bash
+sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0
+```
+
 ### .md ファイルをダブルクリックで開く
 
 「ファイル」→「設定」（`Ctrl+,`）の「ファイルの関連付け」で設定します。
@@ -62,10 +87,10 @@ PC が保護されました」と表示されることがあります。その�
 「登録を解除」すると、MarkdownPad を既定にしていた拡張子は、Windows が
 ほかのアプリで開くか、どのアプリで開くかを尋ねるようになります。
 
-Linux 版（配布はしていないため、自分でビルドした場合）では、「関連付けを
-登録」を押すとアプリ一覧に MarkdownPad が加わり、そのまま `.md` と
-`.markdown` の既定のアプリにもなります。「登録を解除」すると、以前の
-既定のアプリに戻ります。
+Linux 版では、「関連付けを登録」を押すとアプリ一覧に MarkdownPad が
+加わり、そのまま `.md` と `.markdown` の既定のアプリにもなります。登録は
+起動中の `markdownpad` の場所を指すので、置き場所を決めてから登録して
+ください。「登録を解除」すると、以前の既定のアプリに戻ります。
 
 ### 更新とアンインストール
 
@@ -76,6 +101,10 @@ Linux 版（配布はしていないため、自分でビルドした場合）�
   「登録を解除」を押します。そのあと、展開したフォルダを削除します。アプリのデータも
   消す場合は、`%APPDATA%\com.markdownpad.app` と
   `%LOCALAPPDATA%\com.markdownpad.app` も削除します。
+- Linux: 更新は `markdownpad` を新しいものに置き換えます。アンインストール
+  は、関連付けを登録していた場合は先に「登録を解除」を押してから
+  `markdownpad` を削除します。アプリのデータは
+  `~/.local/share/com.markdownpad.app` にあります。
 
 ## 使い方
 
@@ -182,7 +211,7 @@ MarkdownPad は [MIT ライセンス](LICENSE) で公開しています。使用
 再配布、商用利用のいずれも自由で、条件は著作権表示とライセンス文を
 残すことだけです。
 
-アプリに組み込んでいるライブラリのライセンスは、配布する zip の
+アプリに組み込んでいるライブラリのライセンスは、配布する zip / tar.gz の
 `THIRD-PARTY-NOTICES.txt` にまとめています。
 
 ## 開発
