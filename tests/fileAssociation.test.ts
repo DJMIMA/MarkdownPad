@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  associationPlatform,
   associationState,
   extensionAppLabel,
   type FileAssociationStatus,
@@ -70,4 +71,19 @@ test("another copy of MarkdownPad as the default shows where it is", () => {
     extensionAppLabel({ extension: ".md", isDefault: false, defaultApp: "メモ帳", defaultPath: "C:\\Windows\\notepad.exe" }),
     "メモ帳",
   );
+});
+
+test("on Linux a moved binary is told apart by the exact path", () => {
+  const linux = (registeredPath: string): FileAssociationStatus => ({
+    supported: true,
+    platform: "linux",
+    exePath: "/home/user/.local/bin/markdownpad",
+    registeredPath,
+    extensions: [{ extension: ".md / .markdown", isDefault: true, defaultApp: "MarkdownPad" }],
+  });
+
+  assert.equal(associationState(linux("/home/user/.local/bin/markdownpad")), "default");
+  assert.equal(associationState(linux("/home/user/.local/bin/MarkdownPad")), "moved");
+  assert.equal(associationPlatform(linux("/x")), "linux");
+  assert.equal(associationPlatform(status()), "windows", "older builds report no platform");
 });

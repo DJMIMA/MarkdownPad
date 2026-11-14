@@ -519,17 +519,99 @@ fn choose_markdown_file_path<R: Runtime>(
     Ok(selected_path_from_buffer(&file_buffer))
 }
 
-#[cfg(not(target_os = "windows"))]
+/// A glob that matches `extension` in any letter case, since GTK file
+/// filter patterns are case-sensitive (`*.[mM][dD]`).
+#[cfg(target_os = "linux")]
+fn any_case_pattern(extension: &str) -> String {
+    let letters: String = extension
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphabetic() {
+                format!("[{}{}]", c.to_ascii_lowercase(), c.to_ascii_uppercase())
+            } else {
+                c.to_string()
+            }
+        })
+        .collect();
+    format!("*.{letters}")
+}
+
+#[cfg(target_os = "linux")]
+fn choose_markdown_file_path<R: Runtime>(
+    window: &WebviewWindow<R>,
+    suggested_name: Option<&str>,
+    save: bool,
+) -> Result<Option<PathBuf>, String> {
+    use gtk::prelude::*;
+    use gtk::{FileChooserAction, FileChooserNative, FileFilter, ResponseType};
+
+    let (title, action, accept) = if save {
+        ("名前を付けて保存", FileChooserAction::Save, "保存")
+    } else {
+        ("Markdown ファイルを開く", FileChooserAction::Open, "開く")
+    };
+    // Modal to the window the command came from. FileChooserNative uses the
+    // desktop portal's dialog where there is one, GTK's own otherwise.
+    let parent = window.gtk_window().ok();
+    let dialog = FileChooserNative::new(
+        Some(title),
+        parent.as_ref(),
+        action,
+        Some(accept),
+        Some("キャンセル"),
+    );
+    dialog.set_modal(true);
+
+    let filters: [(&str, &[&str]); 3] = [
+        ("Markdown ファイル (*.md, *.markdown)", &["md", "markdown"]),
+        ("テキスト ファイル (*.txt)", &["txt"]),
+        ("すべてのファイル", &[]),
+    ];
+
+    for (name, extensions) in filters {
+        let filter = FileFilter::new();
+        filter.set_name(Some(name));
+
+        if extensions.is_empty() {
+            filter.add_pattern("*");
+        }
+
+        for extension in extensions {
+            filter.add_pattern(&any_case_pattern(extension));
+        }
+
+        dialog.add_filter(filter);
+    }
+
+    if save {
+        dialog.set_do_overwrite_confirmation(true);
+
+        if let Some(name) = suggested_name {
+            dialog.set_current_name(name);
+        }
+    }
+
+    let response = dialog.run();
+    let path = (response == ResponseType::Accept)
+        .then(|| dialog.filename())
+        .flatten();
+    dialog.destroy();
+
+    Ok(path)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn choose_markdown_file_path<R: Runtime>(
     _window: &WebviewWindow<R>,
     _suggested_name: Option<&str>,
     _save: bool,
 ) -> Result<Option<PathBuf>, String> {
-    Err("ファイルダイアログは Windows でのみ利用できます。".to_string())
+    Err("ファイルダイアログは Windows と Linux でのみ利用できます。".to_string())
 }
 
 // The native file dialogs run on the main thread (synchronous commands do),
-// which already has the COM apartment the dialogs need.
+// which already has the COM apartment (Windows) or the GTK main loop (Linux)
+// the dialogs need.
 #[tauri::command]
 fn open_markdown_file_dialog<R: Runtime>(
     app: AppHandle<R>,
@@ -816,9 +898,14 @@ async fn unregister_file_association() -> Result<file_association::AssociationSt
 }
 
 /// Opens Windows' Default apps settings at MarkdownPad's page, where the user
-/// makes it the default (apps cannot do that themselves).
+/// makes it the default (apps cannot do that themselves). Linux has no such
+/// page; registering there sets the default itself.
 #[tauri::command]
 fn open_default_apps_settings<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    if !cfg!(target_os = "windows") {
+        return Err("既定のアプリの設定画面は Windows でのみ開けます。".to_string());
+    }
+
     app.opener()
         .open_url(file_association::default_apps_settings_uri(), None::<&str>)
         .map_err(|error| {
@@ -1228,6 +1315,13 @@ mod tests {
         assert_eq!(image_file_to_allow(&directory), None, "a folder");
 
         fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn file_filter_patterns_ignore_letter_case() {
+        assert_eq!(any_case_pattern("md"), "*.[mM][dD]");
+        assert_eq!(any_case_pattern("txt"), "*.[tT][xX][tT]");
     }
 
     #[cfg(target_os = "windows")]

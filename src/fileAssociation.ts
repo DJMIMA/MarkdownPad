@@ -10,6 +10,12 @@ export interface ExtensionAssociation {
 
 export interface FileAssociationStatus {
   supported: boolean;
+  /**
+   * How the default app is chosen: in Windows' Default apps settings, or (on
+   * Linux) by registering, which writes the user's mimeapps.list. Missing in
+   * older builds, which only supported Windows.
+   */
+  platform?: "windows" | "linux" | null;
   /** The exe that is running now. */
   exePath: string | null;
   /** The exe the registered association opens, if MarkdownPad is registered. */
@@ -28,12 +34,22 @@ export type AssociationState =
 
 export const unsupportedAssociationStatus: FileAssociationStatus = {
   supported: false,
+  platform: null,
   exePath: null,
   registeredPath: null,
   extensions: [],
 };
 
-function samePath(a: string, b: string) {
+export function associationPlatform(status: FileAssociationStatus): "windows" | "linux" {
+  return status.platform === "linux" ? "linux" : "windows";
+}
+
+function samePath(a: string, b: string, platform: "windows" | "linux") {
+  // Linux paths are case-sensitive; Windows ones are not, and take either slash.
+  if (platform === "linux") {
+    return a === b;
+  }
+
   const normalize = (path: string) => path.replace(/\//g, "\\").toLowerCase();
   return normalize(a) === normalize(b);
 }
@@ -47,7 +63,10 @@ export function associationState(status: FileAssociationStatus): AssociationStat
     return "unregistered";
   }
 
-  if (status.exePath && !samePath(status.registeredPath, status.exePath)) {
+  if (
+    status.exePath &&
+    !samePath(status.registeredPath, status.exePath, associationPlatform(status))
+  ) {
     return "moved";
   }
 
@@ -60,7 +79,7 @@ export function associationState(status: FileAssociationStatus): AssociationStat
 export function associationStateLabel(state: AssociationState) {
   switch (state) {
     case "unsupported":
-      return "この環境では利用できません（Windows 版のみ）";
+      return "この環境では利用できません（Windows 版・Linux 版のみ）";
     case "unregistered":
       return "未登録";
     case "moved":

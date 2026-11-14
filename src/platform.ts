@@ -773,7 +773,7 @@ export async function listenToOpenFilesRequested(
   });
 }
 
-/** Whether Explorer opens Markdown files with this MarkdownPad (Windows). */
+/** Whether the file manager opens Markdown files with this MarkdownPad. */
 export async function loadFileAssociationStatus(): Promise<FileAssociationStatus> {
   if (!isTauriRuntime()) {
     return unsupportedAssociationStatus;

@@ -1,7 +1,8 @@
 // The settings dialog (File > 設定, Ctrl+,) and its file association flow,
 // against a scripted Tauri IPC mock: status shown per extension, registering
 // then opening Windows' Default apps page, unregistering, a moved exe, errors
-// shown inline, and the plain browser where association is unavailable.
+// shown inline, Linux (where registering sets the default itself), and the
+// plain browser where association is unavailable.
 import assert from "node:assert/strict";
 import { launchBrowser } from "./launch.mjs";
 import { installTauriMock, setTauriResponse, tauriCalls } from "./tauri-mock.mjs";
@@ -142,13 +143,66 @@ try {
     await page.close();
   }
 
+  // Linux: registering also makes MarkdownPad the default, so no settings page
+  // opens; a registration that lost the default offers to take it back.
+  {
+    const linuxExe = "/home/user/.local/bin/markdownpad";
+    const linuxStatus = (registeredPath, isDefault, defaultApp) => ({
+      supported: true,
+      platform: "linux",
+      exePath: linuxExe,
+      registeredPath,
+      extensions: [{ extension: ".md / .markdown", isDefault, defaultApp, defaultPath: null }],
+    });
+    const page = await openApp(
+      browser,
+      {
+        file_association_status: linuxStatus(null, false, "Okular"),
+        register_file_association: linuxStatus(linuxExe, true, "MarkdownPad"),
+      },
+      errors,
+    );
+
+    await page.keyboard.press("Control+Comma");
+    await page.waitForFunction(
+      () => document.querySelector("[data-testid=association-state]")?.textContent === "未登録",
+    );
+    assert.match(await page.textContent(".settings-note"), /^ファイルマネージャーでダブルクリック/);
+    assert.deepEqual((await rows(page)).slice(1), [[".md / .markdown", "Okular"]]);
+
+    await page.click("button:has-text('関連付けを登録')");
+    await page.waitForSelector("[role=status]");
+    assert.equal(await page.textContent("[role=status]"), "登録しました。");
+    assert.equal(await stateText(page), "登録済み・既定のアプリ");
+    assert.equal((await tauriCalls(page, "open_default_apps_settings")).length, 0);
+
+    // Another app took the default back.
+    await setTauriResponse(page, "file_association_status", linuxStatus(linuxExe, false, "Okular"));
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await page.waitForFunction(
+      () =>
+        document.querySelector("[data-testid=association-state]")?.textContent ===
+        "登録済み（既定のアプリは未設定）",
+    );
+    assert.equal(await page.locator("button:has-text('既定のアプリを選ぶ')").count(), 0);
+    await page.click("button:has-text('既定のアプリにする')");
+    await page.waitForFunction(
+      () =>
+        document.querySelector("[data-testid=association-state]")?.textContent ===
+        "登録済み・既定のアプリ",
+    );
+    assert.equal((await tauriCalls(page, "register_file_association")).length, 2);
+    assert.equal((await tauriCalls(page, "open_default_apps_settings")).length, 0);
+    await page.close();
+  }
+
   // Outside Tauri the File menu still has 設定, without association actions.
   {
     const page = await openApp(browser, {}, errors, { tauri: false });
     await page.click(".menu-root-button:has-text('ファイル')");
     await page.click(".menu-item:has-text('設定')");
     await page.waitForSelector(".settings-dialog");
-    assert.equal(await stateText(page), "この環境では利用できません（Windows 版のみ）");
+    assert.equal(await stateText(page), "この環境では利用できません（Windows 版・Linux 版のみ）");
     assert.equal(await page.locator(".settings-actions").count(), 0);
     await page.close();
   }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
 import {
+  associationPlatform,
   associationState,
   associationStateLabel,
   extensionAppLabel,
@@ -20,6 +21,10 @@ interface SettingsDialogProps {
 
 const chooseDefaultMessage =
   "Windows の設定で、.md と .markdown の既定のアプリに MarkdownPad を選んでください。";
+// On Linux registering writes the default itself; it only stays unset when a
+// file the app does not edit (a system-wide one) wins.
+const linuxNotDefaultMessage =
+  "登録しましたが、既定のアプリにはなりませんでした。デスクトップ環境の設定で MarkdownPad を選んでください。";
 
 export function SettingsDialog({ onClose }: SettingsDialogProps) {
   const [status, setStatus] = useState<FileAssociationStatus | null>(null);
@@ -86,6 +91,10 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
         return "登録しました。";
       }
 
+      if (associationPlatform(next) === "linux") {
+        return linuxNotDefaultMessage;
+      }
+
       await openDefaultAppsSettings();
       return chooseDefaultMessage;
     });
@@ -138,6 +147,7 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
   }
 
   const state = status ? associationState(status) : null;
+  const linux = status ? associationPlatform(status) === "linux" : false;
 
   return (
     <div className="dialog-backdrop" role="presentation">
@@ -153,7 +163,8 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
         <div className="settings-section" aria-labelledby="settings-association-title">
           <h3 id="settings-association-title">ファイルの関連付け</h3>
           <p className="settings-note">
-            エクスプローラーでダブルクリックした Markdown ファイルを MarkdownPad で開きます。
+            {linux ? "ファイルマネージャー" : "エクスプローラー"}
+            でダブルクリックした Markdown ファイルを MarkdownPad で開きます。
           </p>
 
           <table className="settings-table">
@@ -187,9 +198,15 @@ export function SettingsDialog({ onClose }: SettingsDialogProps) {
                 </button>
               ) : null}
               {state === "registered" ? (
-                <button type="button" className="primary" disabled={busy} onClick={chooseDefault}>
-                  既定のアプリを選ぶ…
-                </button>
+                linux ? (
+                  <button type="button" className="primary" disabled={busy} onClick={register}>
+                    既定のアプリにする
+                  </button>
+                ) : (
+                  <button type="button" className="primary" disabled={busy} onClick={chooseDefault}>
+                    既定のアプリを選ぶ…
+                  </button>
+                )
               ) : null}
               {state !== "unregistered" ? (
                 <button type="button" className="danger" disabled={busy} onClick={unregister}>
