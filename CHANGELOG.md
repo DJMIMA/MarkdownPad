@@ -8,6 +8,11 @@
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-15
+
+Linux 版を配布物に加えたリリースです。アプリの動作は 0.3.0 から
+変わりません。
+
 ### 追加
 
 - Linux 版（x86_64）を配布物に加えた。`MarkdownPad-<バージョン>-linux-x64.tar.gz`
@@ -84,7 +89,8 @@ Linux 向けの機能を加えたリリースです。配布する Windows 版�
   使っていたウインドウの新しいタブで開く。
 - アプリのアイコン。
 
-[Unreleased]: https://github.com/DJMIMA/MarkdownPad/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/DJMIMA/MarkdownPad/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/DJMIMA/MarkdownPad/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/DJMIMA/MarkdownPad/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/DJMIMA/MarkdownPad/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/DJMIMA/MarkdownPad/compare/v0.1.0...v0.1.1
