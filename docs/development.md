@@ -66,6 +66,17 @@ npm run tauri -- build
 `beforeBuildCommand` で `npm run build` を実行してから、Rust 側を release
 ビルドします。生成物は `src-tauri\target\release\markdownpad.exe` です。
 
+Linux でも同じコマンドで `src-tauri/target/release/markdownpad` が
+できます（配布物は作りません）。手元で使うときは、パスの通った場所へ
+コピーしてから「設定」の「関連付けを登録」を押すと、アプリ一覧への
+登録と `.md` の既定のアプリの設定までが済みます。登録は実行中の
+バイナリの場所を指すので、`target/` のまま登録すると `cargo clean` で
+壊れます。
+
+```bash
+install -Dm755 src-tauri/target/release/markdownpad ~/.local/bin/markdownpad
+```
+
 配布はインストーラーなしの exe なので、`tauri.conf.json` の
 `bundle.active` は `false` のままにします。`bundle.fileAssociations` は
 インストーラーを作る場合のための設定で、今の配布形式では使われません。

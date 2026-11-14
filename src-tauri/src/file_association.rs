@@ -6,6 +6,12 @@
 //! MarkdownPad appear in Windows' "Default apps" settings. Since Windows 8 an
 //! app cannot make itself the default (the user's choice is protected), so
 //! the user picks MarkdownPad there; the settings dialog opens that page.
+//!
+//! On Linux the association uses the Freedesktop desktop entry and
+//! `mimeapps.list` instead (see `xdg`).
+
+#[cfg(any(target_os = "linux", test))]
+mod xdg;
 
 /// The ProgID Explorer uses to open Markdown files with MarkdownPad.
 pub const PROG_ID: &str = "MarkdownPad.Markdown";
@@ -35,6 +41,8 @@ pub struct ExtensionStatus {
 #[serde(rename_all = "camelCase")]
 pub struct AssociationStatus {
     pub supported: bool,
+    /// `"windows"` or `"linux"`: how the default app is chosen differs.
+    pub platform: Option<&'static str>,
     /// The exe that is running now.
     pub exe_path: Option<String>,
     /// The exe the registered ProgID opens, when MarkdownPad is registered
@@ -317,6 +325,7 @@ mod windows_registry {
 
         AssociationStatus {
             supported: true,
+            platform: Some("windows"),
             exe_path: Some(exe.to_string()),
             registered_path,
             extensions,
@@ -388,30 +397,62 @@ pub fn unregister() -> Result<AssociationStatus, String> {
     status()
 }
 
-#[cfg(not(target_os = "windows"))]
+/// The binary to register: an AppImage's own file rather than the copy
+/// mounted while it runs.
+#[cfg(target_os = "linux")]
+fn linux_exe_path() -> Result<String, String> {
+    match std::env::var("APPIMAGE") {
+        Ok(path) if path.starts_with('/') => Ok(path),
+        _ => current_exe_path(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn status() -> Result<AssociationStatus, String> {
+    Ok(xdg::status(&xdg::XdgDirs::from_env()?, &linux_exe_path()?))
+}
+
+/// On Linux registering also makes MarkdownPad the default app: the default
+/// lives in the user's own mimeapps.list, which apps are expected to edit.
+#[cfg(target_os = "linux")]
+pub fn register() -> Result<AssociationStatus, String> {
+    let dirs = xdg::XdgDirs::from_env()?;
+    let exe = linux_exe_path()?;
+    xdg::register(&dirs, &exe)?;
+    Ok(xdg::status(&dirs, &exe))
+}
+
+#[cfg(target_os = "linux")]
+pub fn unregister() -> Result<AssociationStatus, String> {
+    xdg::unregister(&xdg::XdgDirs::from_env()?)?;
+    status()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn unsupported_status() -> AssociationStatus {
     AssociationStatus {
         supported: false,
+        platform: None,
         exe_path: None,
         registered_path: None,
         extensions: Vec::new(),
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn status() -> Result<AssociationStatus, String> {
     let _ = current_exe_path;
     Ok(unsupported_status())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn register() -> Result<AssociationStatus, String> {
-    Err("ファイルの関連付けは Windows でのみ利用できます。".to_string())
+    Err("ファイルの関連付けは Windows と Linux でのみ利用できます。".to_string())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub fn unregister() -> Result<AssociationStatus, String> {
-    Err("ファイルの関連付けは Windows でのみ利用できます。".to_string())
+    Err("ファイルの関連付けは Windows と Linux でのみ利用できます。".to_string())
 }
 
 #[cfg(test)]

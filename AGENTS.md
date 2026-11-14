@@ -445,6 +445,27 @@ Tauri 側の責務:
 - 起動時に自動で登録・修復はしない。ブラウザ（開発時）では「利用できません」と
   表示する。
 
+Linux では XDG の仕組みで同じ操作を提供する（`file_association/xdg.rs`）。
+
+- 登録は `$XDG_DATA_HOME/applications/markdownpad.desktop`（Exec は実行中の
+  バイナリ。AppImage なら `$APPIMAGE`）とアイコンを書き、利用者の
+  `$XDG_CONFIG_HOME/mimeapps.list` の `[Default Applications]` で
+  `text/markdown` / `text/x-markdown` の先頭に置く（既存の候補は後ろに残す）。
+  Linux の既定は利用者自身の設定ファイルなので、Windows と違いアプリから
+  設定してよい。同じ型を既定に持つデスクトップ固有のファイル
+  （`lxqt-mimeapps.list` など）は優先されるため、そちらも書き換える。
+- 状態は XDG の優先順（デスクトップ固有 → 汎用、ユーザー → システム）で
+  `mimeapps.list` を読み、インストール済みの最初のアプリを既定とみなす。
+  パスの比較は大文字小文字を区別する。
+- 解除は、利用者の `mimeapps.list` 群から `markdownpad.desktop` だけを除き、
+  自分が書いたデスクトップエントリとアイコンを消す。
+- 書き込むのはユーザーのデータ / 設定ディレクトリだけ。`update-desktop-database`
+  などのキャッシュ更新は、入っていれば実行する（なくても失敗にしない）。
+
+ファイルダイアログは、Windows は `GetOpenFileNameW` / `GetSaveFileNameW`、Linux は
+GTK の `FileChooserNative`（ポータルがあればそのダイアログ）を、呼び出し元の
+ウインドウにモーダルで出す。どちらも同期コマンドとしてメインスレッドで動かす。
+
 ## セキュリティ
 
 Markdown ファイルは信頼できない入力として扱います。WebView から任意の

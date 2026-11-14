@@ -1967,6 +1967,7 @@ version = "0.2.0"
 dependencies = [
  "dunce",
  "encoding_rs",
+ "gtk",
  "serde",
  "serde_json",
  "tauri",
