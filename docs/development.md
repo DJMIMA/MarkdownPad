@@ -67,7 +67,7 @@ npm run tauri -- build
 ビルドします。生成物は `src-tauri\target\release\markdownpad.exe` です。
 
 Linux でも同じコマンドで `src-tauri/target/release/markdownpad` が
-できます（配布物は作りません）。手元で使うときは、パスの通った場所へ
+できます。手元で使うときは、パスの通った場所へ
 コピーしてから「設定」の「関連付けを登録」を押すと、アプリ一覧への
 登録と `.md` の既定のアプリの設定までが済みます。登録は実行中の
 バイナリの場所を指すので、`target/` のまま登録すると `cargo clean` で
@@ -108,7 +108,9 @@ node scripts/third-party-notices.mjs THIRD-PARTY-NOTICES.txt
 - npm パッケージは `package-lock.json` のうち開発用でないものを対象に、
   各パッケージ同梱のライセンスファイルを使います。
 - Rust クレートは [cargo-about](https://github.com/EmbarkStudios/cargo-about)
-  で Windows 向けのビルドに入るものを集めます。受け入れるライセンスは
+  で、指定したターゲット（省略時は Windows）のビルドに入るものを集めます。
+  Linux 向けは `node scripts/third-party-notices.mjs <出力先> x86_64-unknown-linux-gnu`
+  で作ります。受け入れるライセンスは
   `src-tauri/about.toml` の `accepted` で、複数のライセンスから選べる
   クレートはこの並びの先頭（MIT）を使います。
 - 依存関係を足して、`accepted` にないライセンスのものが入ると、生成が
@@ -126,6 +128,9 @@ node scripts/third-party-notices.mjs THIRD-PARTY-NOTICES.txt
   ショットは Actions の artifact に保存する
 - Tauri（Windows）: `cargo fmt --check`、`cargo clippy -- -D warnings`、
   `cargo test`、第三者ライセンス表記の生成（下記）
+- Tauri（Linux、`ubuntu-22.04`）: `cargo clippy -- -D warnings`、
+  `cargo test`、Linux 向けの第三者ライセンス表記の生成。GTK のファイル
+  ダイアログや XDG の関連付けなど、Linux でだけビルドされるコードを検査する
 
 依存関係は Dependabot（`.github/dependabot.yml`）が毎週月曜に確認します。
 minor / patch の更新はエコシステムごとに 1 つの PR にまとめ、major の
@@ -154,8 +159,21 @@ git push origin v0.1.1
 ```
 
 タグを push すると `.github/workflows/release.yml` が動きます。タグと
-バージョンが一致することを確かめてから exe をビルドし、
-`MarkdownPad-<バージョン>-windows-x64.zip` と SHA-256 のチェックサムを
-GitHub Releases に公開します。zip の中身は `MarkdownPad.exe`、
-`LICENSE.txt`、`THIRD-PARTY-NOTICES.txt` です。リリースノートには `CHANGELOG.md` の
+バージョンが一致することを確かめてから Windows と Linux でビルドし、
+次のファイルとそれぞれの SHA-256 のチェックサム（`.sha256`）を GitHub
+Releases に公開します。
+
+| ファイル | 中身 |
+| --- | --- |
+| `MarkdownPad-<バージョン>-windows-x64.zip` | `MarkdownPad.exe`、`LICENSE.txt`、`THIRD-PARTY-NOTICES.txt` |
+| `MarkdownPad-<バージョン>-linux-x64.tar.gz` | `markdownpad`、`LICENSE.txt`、`THIRD-PARTY-NOTICES.txt` |
+
+Linux 版は、古い glibc でも動くよう `ubuntu-22.04` でビルドします。GTK と
+WebKitGTK は同梱せず、利用者のシステムのものを使います。
+`THIRD-PARTY-NOTICES.txt` は OS ごとに、その OS でビルドに入る crate だけを
+載せます（`node scripts/third-party-notices.mjs <出力先> <ターゲット>`）。
+
+タグを付ける前にビルドだけ試すときは、Actions の「Release」を手動で実行
+します（`gh workflow run release.yml --ref <ブランチ>`）。両方の配布物を
+作ってワークフローの成果物として残し、Releases には公開しません。リリースノートには `CHANGELOG.md` の
 該当する節（`node scripts/changelog.mjs <バージョン>` の出力）を使います。

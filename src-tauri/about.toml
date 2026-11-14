@@ -9,6 +9,8 @@ accepted = [
     "Unicode-3.0",
     "MPL-2.0",
 ]
+# The default target; scripts/third-party-notices.mjs passes --target for
+# each release package (Windows and Linux).
 targets = ["x86_64-pc-windows-msvc"]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true

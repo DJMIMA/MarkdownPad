@@ -13,17 +13,9 @@
 #[cfg(any(target_os = "linux", test))]
 mod xdg;
 
-/// The ProgID Explorer uses to open Markdown files with MarkdownPad.
-pub const PROG_ID: &str = "MarkdownPad.Markdown";
 /// Name under `Software\RegisteredApplications`, also used to open the app's
 /// page in the Default apps settings.
 pub const REGISTERED_APP_NAME: &str = "MarkdownPad";
-pub const EXTENSIONS: &[&str] = &[".md", ".markdown"];
-
-const CLASSES_KEY: &str = r"Software\Classes";
-const APP_KEY: &str = r"Software\MarkdownPad";
-const CAPABILITIES_KEY: &str = r"Software\MarkdownPad\Capabilities";
-const REGISTERED_APPLICATIONS_KEY: &str = r"Software\RegisteredApplications";
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -51,112 +43,132 @@ pub struct AssociationStatus {
     pub extensions: Vec<ExtensionStatus>,
 }
 
-/// One registry value to write under HKEY_CURRENT_USER. `name: None` is the
-/// key's default value.
-#[derive(Debug, PartialEq, Eq)]
-pub struct RegistryValue {
-    pub key: String,
-    pub name: Option<&'static str>,
-    pub data: String,
-}
+/// The registry layout that registering writes on Windows. It is plain
+/// data, so the tests check it on every OS.
+#[cfg(any(target_os = "windows", test))]
+mod registry_layout {
+    use super::REGISTERED_APP_NAME;
 
-pub fn open_command(exe: &str) -> String {
-    format!("\"{exe}\" \"%1\"")
-}
+    /// The ProgID Explorer uses to open Markdown files with MarkdownPad.
+    pub const PROG_ID: &str = "MarkdownPad.Markdown";
+    pub const EXTENSIONS: &[&str] = &[".md", ".markdown"];
 
-/// The exe an open command runs: the quoted first part, or everything up to
-/// the first space.
-pub fn exe_from_command(command: &str) -> Option<String> {
-    let command = command.trim();
+    pub const CLASSES_KEY: &str = r"Software\Classes";
+    #[cfg(target_os = "windows")]
+    pub const APP_KEY: &str = r"Software\MarkdownPad";
+    pub const CAPABILITIES_KEY: &str = r"Software\MarkdownPad\Capabilities";
+    pub const REGISTERED_APPLICATIONS_KEY: &str = r"Software\RegisteredApplications";
 
-    let exe = if let Some(rest) = command.strip_prefix('"') {
-        rest.split('"').next()?
-    } else {
-        command.split(' ').next()?
-    };
-
-    (!exe.is_empty()).then(|| exe.to_string())
-}
-
-/// Windows' "How do you want to open this file?" picker, which
-/// `AssocQueryString` reports when no app is the default yet.
-pub fn is_app_picker(executable: &str) -> bool {
-    executable
-        .rsplit(['\\', '/'])
-        .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case("OpenWith.exe"))
-}
-
-pub fn same_path(a: &str, b: &str) -> bool {
-    let normalize = |path: &str| path.replace('/', "\\").to_lowercase();
-    normalize(a) == normalize(b)
-}
-
-fn prog_id_key() -> String {
-    format!(r"{CLASSES_KEY}\{PROG_ID}")
-}
-
-fn extension_key(extension: &str) -> String {
-    format!(r"{CLASSES_KEY}\{extension}")
-}
-
-fn open_command_key() -> String {
-    format!(r"{}\shell\open\command", prog_id_key())
-}
-
-/// Everything registering writes, for the exe at `exe`.
-pub fn registry_values(exe: &str) -> Vec<RegistryValue> {
-    let value = |key: String, name: Option<&'static str>, data: &str| RegistryValue {
-        key,
-        name,
-        data: data.to_string(),
-    };
-    let prog_id = prog_id_key();
-    let mut values = vec![
-        value(prog_id.clone(), None, "Markdown 文書"),
-        value(
-            format!(r"{prog_id}\DefaultIcon"),
-            None,
-            &format!("\"{exe}\",0"),
-        ),
-        value(
-            format!(r"{prog_id}\shell\open"),
-            Some("FriendlyAppName"),
-            "MarkdownPad",
-        ),
-        value(open_command_key(), None, &open_command(exe)),
-        value(
-            CAPABILITIES_KEY.to_string(),
-            Some("ApplicationName"),
-            "MarkdownPad",
-        ),
-        value(
-            CAPABILITIES_KEY.to_string(),
-            Some("ApplicationDescription"),
-            "軽量な Markdown エディタ",
-        ),
-    ];
-
-    for extension in EXTENSIONS {
-        values.push(value(
-            format!(r"{}\OpenWithProgids", extension_key(extension)),
-            Some(PROG_ID),
-            "",
-        ));
-        values.push(RegistryValue {
-            key: format!(r"{CAPABILITIES_KEY}\FileAssociations"),
-            name: Some(*extension),
-            data: PROG_ID.to_string(),
-        });
+    /// One registry value to write under HKEY_CURRENT_USER. `name: None` is the
+    /// key's default value.
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct RegistryValue {
+        pub key: String,
+        pub name: Option<&'static str>,
+        pub data: String,
     }
 
-    values.push(value(
-        REGISTERED_APPLICATIONS_KEY.to_string(),
-        Some(REGISTERED_APP_NAME),
-        CAPABILITIES_KEY,
-    ));
-    values
+    pub fn open_command(exe: &str) -> String {
+        format!("\"{exe}\" \"%1\"")
+    }
+
+    /// The exe an open command runs: the quoted first part, or everything up to
+    /// the first space.
+    pub fn exe_from_command(command: &str) -> Option<String> {
+        let command = command.trim();
+
+        let exe = if let Some(rest) = command.strip_prefix('"') {
+            rest.split('"').next()?
+        } else {
+            command.split(' ').next()?
+        };
+
+        (!exe.is_empty()).then(|| exe.to_string())
+    }
+
+    /// Windows' "How do you want to open this file?" picker, which
+    /// `AssocQueryString` reports when no app is the default yet.
+    pub fn is_app_picker(executable: &str) -> bool {
+        executable
+            .rsplit(['\\', '/'])
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("OpenWith.exe"))
+    }
+
+    pub fn same_path(a: &str, b: &str) -> bool {
+        let normalize = |path: &str| path.replace('/', "\\").to_lowercase();
+        normalize(a) == normalize(b)
+    }
+
+    pub fn prog_id_key() -> String {
+        format!(r"{CLASSES_KEY}\{PROG_ID}")
+    }
+
+    pub fn extension_key(extension: &str) -> String {
+        format!(r"{CLASSES_KEY}\{extension}")
+    }
+
+    pub fn open_command_key() -> String {
+        format!(r"{}\shell\open\command", prog_id_key())
+    }
+
+    /// Everything registering writes, for the exe at `exe`.
+    pub fn registry_values(exe: &str) -> Vec<RegistryValue> {
+        let value = |key: String, name: Option<&'static str>, data: &str| RegistryValue {
+            key,
+            name,
+            data: data.to_string(),
+        };
+        let prog_id = prog_id_key();
+        let mut values = vec![
+            value(prog_id.clone(), None, "Markdown 文書"),
+            value(
+                format!(r"{prog_id}\DefaultIcon"),
+                None,
+                &format!("\"{exe}\",0"),
+            ),
+            value(
+                format!(r"{prog_id}\shell\open"),
+                Some("FriendlyAppName"),
+                "MarkdownPad",
+            ),
+            value(open_command_key(), None, &open_command(exe)),
+            value(
+                CAPABILITIES_KEY.to_string(),
+                Some("ApplicationName"),
+                "MarkdownPad",
+            ),
+            value(
+                CAPABILITIES_KEY.to_string(),
+                Some("ApplicationDescription"),
+                "軽量な Markdown エディタ",
+            ),
+        ];
+
+        for extension in EXTENSIONS {
+            values.push(value(
+                format!(r"{}\OpenWithProgids", extension_key(extension)),
+                Some(PROG_ID),
+                "",
+            ));
+            values.push(RegistryValue {
+                key: format!(r"{CAPABILITIES_KEY}\FileAssociations"),
+                name: Some(*extension),
+                data: PROG_ID.to_string(),
+            });
+        }
+
+        values.push(value(
+            REGISTERED_APPLICATIONS_KEY.to_string(),
+            Some(REGISTERED_APP_NAME),
+            CAPABILITIES_KEY,
+        ));
+        values
+    }
 }
+
+#[cfg(any(target_os = "windows", test))]
+use registry_layout::*;
 
 /// The Default apps settings page for MarkdownPad (Windows 11; older
 /// versions open the general Default apps page).

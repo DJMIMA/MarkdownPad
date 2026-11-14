@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+### 追加
+
+- Linux 版（x86_64）を配布物に加えた。`MarkdownPad-<バージョン>-linux-x64.tar.gz`
+  に実行ファイル `markdownpad` とライセンス文が入っている。GTK と
+  WebKitGTK はシステムのものを使う（Ubuntu 22.04 以降など）。
+
 ## [0.3.0] - 2026-11-14
 
 Linux 向けの機能を加えたリリースです。配布する Windows 版の動作は
