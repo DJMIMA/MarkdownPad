@@ -2,6 +2,7 @@ import {
   indentLess,
   insertNewlineAndIndent,
   insertTab,
+  redo,
 } from "@codemirror/commands";
 import { syntaxTree } from "@codemirror/language";
 import {
@@ -342,5 +343,12 @@ export const markdownPadKeymap = keymap.of([
   {
     key: "Backspace",
     run: deleteMarkupBackward,
+  },
+  // CodeMirror's historyKeymap binds Ctrl+Shift+Z to redo on Linux only;
+  // Windows users expect it alongside Ctrl+Y.
+  {
+    win: "Ctrl-Shift-z",
+    run: redo,
+    preventDefault: true,
   },
 ]);

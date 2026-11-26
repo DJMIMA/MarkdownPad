@@ -164,6 +164,7 @@ Linux 版では、「関連付けを登録」を押すとアプリ一覧に Mark
 | 印刷 | `Ctrl+P` |
 | 設定 | `Ctrl+,` |
 | タブを閉じる / ウインドウを閉じる | `Ctrl+W` / `Ctrl+Shift+W` |
+| 元に戻す / やり直し | `Ctrl+Z` / `Ctrl+Y`（または `Ctrl+Shift+Z`） |
 | 検索 / 置換 | `Ctrl+F` / `Ctrl+H` |
 | 次を検索 / 前を検索 | `F3` / `Shift+F3` |
 | 拡大 / 縮小 / 既定値に戻す | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` |
